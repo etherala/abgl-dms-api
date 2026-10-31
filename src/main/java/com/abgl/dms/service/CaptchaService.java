@@ -1,8 +1,10 @@
-package com.abgl.dms.captcha.service;
+package com.abgl.dms.service;
 
-import com.abgl.dms.captcha.entity.CaptchaToken;
-import com.abgl.dms.captcha.repository.CaptchaRepository;
+import com.abgl.dms.entity.CaptchaToken;
+import com.abgl.dms.repository.CaptchaRepository;
 import com.google.code.kaptcha.Producer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +24,8 @@ import javax.imageio.ImageIO;
 
 @Service
 public class CaptchaService {
+
+    private static final Logger log = LoggerFactory.getLogger(CaptchaService.class);
 
     private final Producer kaptchaProducer;
     private final CaptchaRepository repo;
@@ -79,6 +83,7 @@ public class CaptchaService {
         } catch (IllegalArgumentException ex) {
             return new ValidateResult(false, "bad_id");
         } catch (Exception e) {
+            log.error("CAPTCHA validation failed due to an internal error", e);
             return new ValidateResult(false, "error");
         }
     }
@@ -97,6 +102,7 @@ public class CaptchaService {
     }
 
     @Scheduled(fixedRateString = "${captcha.cleanup-rate-ms:60000}")
+    @Transactional
     public void cleanupExpired() {
         repo.deleteByExpiresAtBefore(Instant.now());
     }

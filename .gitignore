@@ -1,6 +1,7 @@
 HELP.md
 .gradle
 build/
+target/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
@@ -35,3 +36,21 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Logs and local runtime files ###
+*.log
+*.log.*
+/logs/
+app.out.log
+hs_err_pid*.log
+
+### Local environment and test artifacts ###
+.env
+.env.*
+!.env.example
+/coverage/
+/htmlcov/
+/.coverage
+/test-results/
+*.tmp
+*.swp

@@ -1,4 +1,4 @@
-package com.abgl.dms.captcha.config;
+package com.abgl.dms.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;

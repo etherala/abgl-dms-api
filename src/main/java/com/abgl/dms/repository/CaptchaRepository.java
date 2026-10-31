@@ -1,6 +1,6 @@
-package com.abgl.dms.captcha.repository;
+package com.abgl.dms.repository;
 
-import com.abgl.dms.captcha.entity.CaptchaToken;
+import com.abgl.dms.entity.CaptchaToken;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.Instant;

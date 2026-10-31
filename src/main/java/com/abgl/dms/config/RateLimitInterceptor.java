@@ -1,4 +1,4 @@
-package com.abgl.dms.captcha.config;
+package com.abgl.dms.config;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

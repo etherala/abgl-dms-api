@@ -1,7 +1,9 @@
-package com.abgl.dms.captcha.controller;
+package com.abgl.dms.controller;
 
-import com.abgl.dms.captcha.service.CaptchaService;
+import com.abgl.dms.service.CaptchaService;
 import jakarta.validation.constraints.NotBlank;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -13,20 +15,29 @@ import java.util.Map;
 @Validated
 public class CaptchaController {
 
+    private static final Logger log = LoggerFactory.getLogger(CaptchaController.class);
+
     private final CaptchaService service;
 
     public CaptchaController(CaptchaService service) {
         this.service = service;
     }
 
-    @PostMapping("/generate")
+    @GetMapping("/generate")
     public ResponseEntity<?> generate() throws Exception {
-        var res = service.generate();
-        return ResponseEntity.ok(Map.of(
-                "id", res.id(),
-                "imageBase64", res.imageBase64(),
-                "expiresAt", res.expiresAt()
-        ));
+        log.debug("Received CAPTCHA generation request");
+        try {
+            var res = service.generate();
+            log.debug("CAPTCHA generated successfully; id={}, expiresAt={}", res.id(), res.expiresAt());
+            return ResponseEntity.ok(Map.of(
+                    "id", res.id(),
+                    "imageBase64", res.imageBase64(),
+                    "expiresAt", res.expiresAt()
+            ));
+        } catch (Exception ex) {
+            log.error("CAPTCHA generation failed", ex);
+            throw ex;
+        }
     }
 
     public static class ValidateRequest {
@@ -38,7 +49,9 @@ public class CaptchaController {
 
     @PostMapping("/validate")
     public ResponseEntity<?> validate(@RequestBody ValidateRequest req) {
+        log.debug("Received CAPTCHA validation request");
         var res = service.validate(req.id, req.answer);
+        log.debug("CAPTCHA validation completed; valid={}, message={}", res.valid(), res.message());
         return ResponseEntity.ok(Map.of(
                 "valid", res.valid(),
                 "message", res.message()

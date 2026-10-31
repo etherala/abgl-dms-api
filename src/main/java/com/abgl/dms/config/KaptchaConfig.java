@@ -1,4 +1,4 @@
-package com.abgl.dms.captcha.config;
+package com.abgl.dms.config;
 
 import com.google.code.kaptcha.Producer;
 import com.google.code.kaptcha.impl.DefaultKaptcha;

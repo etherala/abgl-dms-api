@@ -1,4 +1,4 @@
-package com.abgl.dms.captcha.entity;
+package com.abgl.dms.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

@@ -1,4 +1,4 @@
-package com.abgl.dms.captcha.config;
+package com.abgl.dms.config;
 
 import com.google.common.util.concurrent.RateLimiter;
 import org.springframework.beans.factory.annotation.Value;
