@@ -4,6 +4,11 @@ import com.abgl.dms.documentupload.DocumentUploadBatchMetadata;
 import com.abgl.dms.documentupload.DocumentUploadException;
 import com.abgl.dms.documentupload.DocumentUploadResponse;
 import com.abgl.dms.documentupload.DocumentUploadService;
+import com.abgl.dms.i18n.ApplicationMessages;
+import com.abgl.dms.i18n.MessageKeys;
+import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
@@ -24,27 +29,35 @@ import java.util.Map;
 @RequestMapping("/api/documents")
 public class DocumentUploadController {
 
+    private static final Logger log = LoggerFactory.getLogger(DocumentUploadController.class);
+
     private final DocumentUploadService documentUploadService;
     private final ObjectMapper objectMapper;
+    private final ApplicationMessages messages;
 
     public DocumentUploadController(
-            DocumentUploadService documentUploadService, ObjectMapper objectMapper) {
+            DocumentUploadService documentUploadService,
+            ObjectMapper objectMapper,
+            ApplicationMessages messages) {
         this.documentUploadService = documentUploadService;
         this.objectMapper = objectMapper;
+        this.messages = messages;
     }
 
     @PostMapping(consumes = "multipart/form-data")
     public DocumentUploadResponse upload(
             @RequestPart("metadata") String metadataJson,
             MultipartHttpServletRequest multipartRequest,
-            Authentication authentication) {
+            Authentication authentication,
+            HttpServletRequest servletRequest) {
         DocumentUploadBatchMetadata metadata = parseMetadata(metadataJson);
         MultiValueMap<String, MultipartFile> multipartFiles = multipartRequest.getMultiFileMap();
         List<MultipartFile> orderedFiles = multipartFiles.getOrDefault("files", List.of());
         Map<String, MultipartFile> namedFiles = multipartRequest.getFileMap();
         try {
             return documentUploadService.upload(
-                    authentication.getName(), metadata, orderedFiles, namedFiles);
+                    authentication.getName(), metadata, orderedFiles, namedFiles,
+                    servletRequest.getRemoteAddr());
         } catch (DocumentUploadException exception) {
             HttpStatus status = "FORBIDDEN".equals(exception.status())
                     ? HttpStatus.FORBIDDEN
@@ -55,9 +68,22 @@ public class DocumentUploadController {
 
     private DocumentUploadBatchMetadata parseMetadata(String metadataJson) {
         try {
-            return objectMapper.readValue(metadataJson, DocumentUploadBatchMetadata.class);
+            DocumentUploadBatchMetadata metadata =
+                    objectMapper.readValue(metadataJson, DocumentUploadBatchMetadata.class);
+            log.debug("Received document upload metadata: {}", metadata);
+            if (metadata.documents() != null) {
+                for (int index = 0; index < metadata.documents().size(); index++) {
+                    var document = metadata.documents().get(index);
+                    if (document != null) {
+                        log.info("Document upload dates received; recordIndex={}, documentDate={}, expiryDate={}",
+                                index, document.documentDate(), document.expiryDate());
+                    }
+                }
+            }
+            return metadata;
         } catch (JacksonException exception) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Upload metadata is not valid JSON");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, messages.get(MessageKeys.DOCUMENT_UPLOAD_METADATA_INVALID));
         }
     }
 }

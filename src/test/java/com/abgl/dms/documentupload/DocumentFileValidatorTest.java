@@ -1,7 +1,9 @@
 package com.abgl.dms.documentupload;
 
+import com.abgl.dms.i18n.ApplicationMessages;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.context.support.ResourceBundleMessageSource;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.util.unit.DataSize;
 
@@ -20,7 +22,7 @@ class DocumentFileValidatorTest {
     private static final String BLOCKED_TYPES = "exe,dll,bat.cmd,ps1,js,html,htm,svg,php,sh,jar,war,py,ruby,pl";
 
     private final DocumentFileValidator validator = new DocumentFileValidator(
-            ALLOWED_TYPES, BLOCKED_TYPES, DataSize.ofMegabytes(10));
+            ALLOWED_TYPES, BLOCKED_TYPES, DataSize.ofMegabytes(10), messages());
 
     @Test
     void acceptsPdfWhoseClaimedTypeAndSignatureMatch(@TempDir Path tempDir) throws Exception {
@@ -80,5 +82,12 @@ class DocumentFileValidatorTest {
             zip.closeEntry();
         }
         return bytes.toByteArray();
+    }
+
+    private static ApplicationMessages messages() {
+        ResourceBundleMessageSource source = new ResourceBundleMessageSource();
+        source.setBasename("messages");
+        source.setDefaultEncoding("UTF-8");
+        return new ApplicationMessages(source, "en");
     }
 }

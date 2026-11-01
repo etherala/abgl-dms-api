@@ -26,6 +26,12 @@ import javax.imageio.ImageIO;
 public class CaptchaService {
 
     private static final Logger log = LoggerFactory.getLogger(CaptchaService.class);
+    public static final String CODE_NOT_FOUND_OR_EXPIRED = "not_found_or_expired";
+    public static final String CODE_EXPIRED = "expired";
+    public static final String CODE_VALID = "ok";
+    public static final String CODE_INVALID = "invalid";
+    public static final String CODE_BAD_ID = "bad_id";
+    public static final String CODE_ERROR = "error";
 
     private final Producer kaptchaProducer;
     private final CaptchaRepository repo;
@@ -63,28 +69,28 @@ public class CaptchaService {
         try {
             UUID id = UUID.fromString(idStr);
             Optional<CaptchaToken> opt = repo.findById(id);
-            if (opt.isEmpty()) return new ValidateResult(false, "not_found_or_expired");
+            if (opt.isEmpty()) return new ValidateResult(false, CODE_NOT_FOUND_OR_EXPIRED);
             CaptchaToken token = opt.get();
             if (token.getExpiresAt().isBefore(Instant.now())) {
                 repo.delete(token);
-                return new ValidateResult(false, "expired");
+                return new ValidateResult(false, CODE_EXPIRED);
             }
             String expected = token.getAnswerHmac();
             String actual = hmacHex(normalize(answer));
             if (MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8))) {
                 repo.delete(token);
-                return new ValidateResult(true, "ok");
+                return new ValidateResult(true, CODE_VALID);
             } else {
                 token.setAttempts(token.getAttempts() + 1);
                 repo.save(token);
                 if (token.getAttempts() >= 5) repo.delete(token);
-                return new ValidateResult(false, "invalid");
+                return new ValidateResult(false, CODE_INVALID);
             }
         } catch (IllegalArgumentException ex) {
-            return new ValidateResult(false, "bad_id");
+            return new ValidateResult(false, CODE_BAD_ID);
         } catch (Exception e) {
             log.error("CAPTCHA validation failed due to an internal error", e);
-            return new ValidateResult(false, "error");
+            return new ValidateResult(false, CODE_ERROR);
         }
     }
 
@@ -108,5 +114,5 @@ public class CaptchaService {
     }
 
     public static record GenerateResult(String id, String imageBase64, String expiresAt) {}
-    public static record ValidateResult(boolean valid, String message) {}
+    public static record ValidateResult(boolean valid, String code) {}
 }

@@ -1,5 +1,7 @@
 package com.abgl.dms.controller;
 
+import com.abgl.dms.i18n.ApplicationMessages;
+import com.abgl.dms.i18n.MessageKeys;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -17,6 +19,11 @@ import java.util.Map;
 public class ApiErrorController implements ErrorController {
 
     private static final Logger log = LoggerFactory.getLogger(ApiErrorController.class);
+    private final ApplicationMessages messages;
+
+    public ApiErrorController(ApplicationMessages messages) {
+        this.messages = messages;
+    }
 
     @RequestMapping("/error")
     public ResponseEntity<Map<String, Object>> handleError(HttpServletRequest request) {
@@ -37,7 +44,7 @@ public class ApiErrorController implements ErrorController {
                 "timestamp", Instant.now().toString(),
                 "status", status,
                 "error", statusCode.toString(),
-                "message", "Request failed",
+                "message", messages.get(MessageKeys.REQUEST_FAILED),
                 "path", path
         );
         return ResponseEntity.status(statusCode).body(body);
