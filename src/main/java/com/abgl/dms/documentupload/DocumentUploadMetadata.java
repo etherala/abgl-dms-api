@@ -2,6 +2,8 @@ package com.abgl.dms.documentupload;
 
 public record DocumentUploadMetadata(
         Long clientDocumentId,
+        Long imageId,
+        Integer version,
         String referenceCode,
         String referenceType,
         String categoryCode,
@@ -13,5 +15,7 @@ public record DocumentUploadMetadata(
         Boolean criticalIndicator,
         String approvalType,
         String filePart,
-        String branchCode
+        String branchCode,
+        String action,
+        String approvalStatus
 ) {}

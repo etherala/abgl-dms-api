@@ -124,7 +124,8 @@ public class AuthController {
         return ResponseEntity.ok(Map.of(
                 "user", Map.of(
                         "displayName", displayName,
-                        "initials", initials
+                        "initials", initials,
+                        "username", username
                 )
         ));
     }

@@ -80,27 +80,388 @@ public class DocumentUploadService {
             Map<String, MultipartFile> namedFiles,
             String remoteAddress) {
         validateBatch(batch);
-        validateFileParts(batch, orderedFiles, namedFiles);
         UploadUser user = documentUploadRepository.findUploadUser(username)
                 .orElseThrow(() -> new DocumentUploadException(
                         "FORBIDDEN", messages.get(MessageKeys.AUTH_DMS_USER_NOT_FOUND)));
 
+        String kind = batch.kind().trim().toLowerCase(Locale.ROOT);
+        boolean usesLegacyMaintenance = ("edit".equals(kind) || "reindex".equals(kind))
+                && batch.documents().stream().allMatch(document ->
+                document == null || "SUBMIT".equals(actionOf(document, batch)));
+        if (usesLegacyMaintenance) {
+            validateNoFiles(batch, orderedFiles, namedFiles);
+            return performMetadataUpdates(username, user, batch, kind, remoteAddress);
+        }
+        validateActionFileParts(batch, orderedFiles, namedFiles);
+
         List<DocumentUploadResult> results = new ArrayList<>(batch.documents().size());
+        int orderedFileIndex = 0;
         Set<String> usedFileParts = new HashSet<>();
-        for (int index = 0; index < batch.documents().size(); index++) {
-            DocumentUploadMetadata metadata = batch.documents().get(index);
+        for (DocumentUploadMetadata metadata : batch.documents()) {
             if (metadata == null) {
                 results.add(rejected(null, MessageKeys.DOCUMENT_UPLOAD_METADATA_MISSING));
                 continue;
             }
-            MultipartFile file = resolveFile(metadata, index, orderedFiles, namedFiles, usedFileParts);
-            if (file == null) {
-                results.add(rejected(metadata, MessageKeys.DOCUMENT_UPLOAD_FILE_MISSING));
-                continue;
+            String action = actionOf(metadata, batch);
+            MultipartFile file = null;
+            if (requiresFile(action)) {
+                file = resolveActionFile(metadata, orderedFiles, namedFiles, usedFileParts, orderedFileIndex++);
+                if (file == null) {
+                    results.add(rejected(metadata, MessageKeys.DOCUMENT_UPLOAD_FILE_MISSING));
+                    continue;
+                }
             }
-            results.add(uploadOne(username, user, metadata, file, remoteAddress));
+            results.add(switch (action) {
+                case "SUBMIT" -> "newdoc".equals(kind)
+                        ? uploadNewVersion(username, user, metadata, file, remoteAddress)
+                        : uploadOne(username, user, metadata, file, remoteAddress, action);
+                case "DRAFT" -> uploadOne(username, user, metadata, file, remoteAddress, action);
+                case "DELETE" -> deleteDraft(username, metadata, remoteAddress);
+                case "EDITDRAFT", "EDIT_DRAFT" ->
+                        replaceDraft(username, user, metadata, file, remoteAddress);
+                default -> rejectedWithMessage(metadata, "Unsupported document action: " + metadata.action());
+            });
         }
         return new DocumentUploadResponse(List.copyOf(results));
+    }
+
+    private DocumentUploadResponse performMetadataUpdates(
+            String username,
+            UploadUser user,
+            DocumentUploadBatchMetadata batch,
+            String kind,
+            String remoteAddress) {
+        List<DocumentUploadResult> results = new ArrayList<>(batch.documents().size());
+        for (DocumentUploadMetadata metadata : batch.documents()) {
+            if (metadata == null) {
+                results.add(rejected(null, MessageKeys.DOCUMENT_UPLOAD_METADATA_MISSING));
+            } else {
+                results.add(updateMetadata(username, user, metadata, kind, remoteAddress));
+            }
+        }
+        return new DocumentUploadResponse(List.copyOf(results));
+    }
+
+    private DocumentUploadResult updateMetadata(
+            String username,
+            UploadUser user,
+            DocumentUploadMetadata metadata,
+            String kind,
+            String remoteAddress) {
+        try {
+            validateMaintenanceIdentity(metadata);
+            validateMetadata(metadata, false);
+            LocalDate documentDate = parseDate(metadata.documentDate(), "documentDate");
+            LocalDate expiryDate = parseOptionalDate(metadata.expiryDate(), "expiryDate");
+            validateDateOrder(documentDate, expiryDate);
+            AuthorizedDocumentType documentType = validateTargetDocumentMetadata(username, user, metadata);
+            boolean automaticApproval = "AUTO".equalsIgnoreCase(documentType.approvalType().trim());
+            String requestedStatus = metadata.approvalStatus() == null
+                    ? ""
+                    : metadata.approvalStatus().trim().toUpperCase(Locale.ROOT);
+            String updatedApprovalStatus = null;
+            if ("edit".equals(kind) && "I".equals(requestedStatus)) {
+                updatedApprovalStatus = automaticApproval ? "A" : "P";
+            } else if ("edit".equals(kind) && "A".equals(requestedStatus) && automaticApproval) {
+                updatedApprovalStatus = "A";
+            }
+            String workflowType = "edit".equals(kind) ? "DOC_EDIT" : "DOC_REINDEX";
+            persistenceService.editOrReindex(new DocumentMaintenanceRecord(
+                    metadata.imageId(),
+                    metadata.version(),
+                    metadata.documentTypeCode(),
+                    metadata.referenceCode(),
+                    documentDate,
+                    expiryDate,
+                    metadata.title().trim(),
+                    metadata.additionalInformation(),
+                    username,
+                    workflowType,
+                    "edit".equals(kind) ? "Updated document metadata" : "Re-indexed document",
+                    "Document metadata updated successfully.",
+                    remoteAddress), updatedApprovalStatus);
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(),
+                    metadata.imageId(),
+                    metadata.title().trim(),
+                    "UPDATED",
+                    messages.get(MessageKeys.DOCUMENT_MAINTENANCE_SUCCESS));
+        } catch (DocumentUploadException exception) {
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), null, metadata.title(),
+                    exception.status(), exception.publicMessage());
+        } catch (DocumentNotAccessibleException exception) {
+            return rejectedWithMessage(
+                    metadata, messages.get(MessageKeys.DOCUMENT_NOT_FOUND_OR_UNAUTHORIZED));
+        } catch (IllegalArgumentException exception) {
+            return rejectedWithMessage(metadata, exception.getMessage());
+        }
+    }
+
+    private DocumentUploadResult uploadNewVersion(
+            String username,
+            UploadUser user,
+            DocumentUploadMetadata metadata,
+            MultipartFile file,
+            String remoteAddress) {
+        Path quarantinedFile = null;
+        Path storedFile = null;
+        boolean persisted = false;
+        try {
+            long imageId = requestedImageId(metadata);
+            int currentVersion = metadata.version() == null
+                    ? documentUploadRepository.findLatestVisibleVersion(username, imageId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            messages.get(MessageKeys.DOCUMENT_NOT_FOUND_OR_UNAUTHORIZED)))
+                    : metadata.version();
+            if (currentVersion < 1 || currentVersion == Integer.MAX_VALUE) {
+                throw rejected(MessageKeys.DOCUMENT_UPLOAD_METADATA_FIELDS_INVALID);
+            }
+            validateMetadata(metadata, false);
+            LocalDate documentDate = parseDate(metadata.documentDate(), "documentDate");
+            LocalDate expiryDate = parseOptionalDate(metadata.expiryDate(), "expiryDate");
+            validateDateOrder(documentDate, expiryDate);
+            AuthorizedDocumentType documentType = validateTargetDocumentMetadata(username, user, metadata);
+
+            String extension = fileValidator.validateAndGetExtension(file);
+            String actualFileName = actualFileName(file);
+            int newVersion = currentVersion + 1;
+            String storedFileName = imageId + "_" + newVersion + "." + extension;
+            LocalDate storageDate = LocalDate.now();
+            String relativeDirectory = "/" + storageDate.getYear()
+                    + "/" + storageDate.format(MONTH_DIRECTORY)
+                    + "/" + String.format(Locale.ROOT, "%02d", storageDate.getDayOfMonth());
+            Path relativePath = Path.of(
+                    Integer.toString(storageDate.getYear()),
+                    storageDate.format(MONTH_DIRECTORY),
+                    String.format(Locale.ROOT, "%02d", storageDate.getDayOfMonth()));
+            Path targetDirectory = storagePath.resolve(relativePath).normalize();
+            Files.createDirectories(targetDirectory);
+            storedFile = targetDirectory.resolve(storedFileName).normalize();
+            ensureWithinStorage(storedFile);
+
+            FileDetails fileDetails;
+            if (clamAvEnabled) {
+                Files.createDirectories(quarantinePath);
+                quarantinedFile = quarantinePath.resolve(UUID.randomUUID() + ".quarantine");
+                fileDetails = copyAndHash(file.getInputStream(), quarantinedFile);
+                fileValidator.validateSignature(quarantinedFile, extension);
+                try {
+                    clamAvScanner.scan(quarantinedFile);
+                } catch (ClamAvScanner.InfectedFileException exception) {
+                    throw new DocumentUploadException(
+                            "REJECTED", messages.get(MessageKeys.DOCUMENT_UPLOAD_MALWARE_DETECTED), exception);
+                } catch (IOException exception) {
+                    throw new DocumentUploadException(
+                            "FAILED", messages.get(MessageKeys.DOCUMENT_UPLOAD_SCANNER_UNAVAILABLE), exception);
+                }
+                moveApprovedFile(quarantinedFile, storedFile);
+                quarantinedFile = null;
+            } else {
+                fileDetails = copyAndHash(file.getInputStream(), storedFile);
+                fileValidator.validateSignature(storedFile, extension);
+            }
+
+            String approvalStatus = "AUTO".equalsIgnoreCase(documentType.approvalType().trim()) ? "A" : "P";
+            persistenceService.createNewVersion(
+                    new DocumentMaintenanceRecord(
+                            imageId, currentVersion, metadata.documentTypeCode(), metadata.referenceCode(),
+                            documentDate, expiryDate, metadata.title().trim(), metadata.additionalInformation(),
+                            username, "DOC_NEWDOC", "Created new document version",
+                            "New document version uploaded successfully.", remoteAddress),
+                    newVersion, relativeDirectory, storedFileName, actualFileName, extension,
+                    fileDetails.size(), fileDetails.sha256(), approvalStatus);
+            persisted = true;
+            boolean autoApproved = "A".equals(approvalStatus);
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), imageId, metadata.title().trim(),
+                    autoApproved ? "APPROVED" : "PENDING_APPROVAL",
+                    messages.get(autoApproved
+                            ? MessageKeys.DOCUMENT_UPLOAD_SUCCESS_APPROVED
+                            : MessageKeys.DOCUMENT_UPLOAD_SUCCESS_PENDING));
+        } catch (DocumentUploadException exception) {
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), null, metadata.title(),
+                    exception.status(), exception.publicMessage());
+        } catch (DocumentNotAccessibleException exception) {
+            return rejectedWithMessage(
+                    metadata, messages.get(MessageKeys.DOCUMENT_NOT_FOUND_OR_UNAUTHORIZED));
+        } catch (IllegalArgumentException exception) {
+            return rejectedWithMessage(metadata, exception.getMessage());
+        } catch (Exception exception) {
+            log.error("New document version upload failed; imageId={}, username={}",
+                    metadata.imageId(), username, exception);
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), null, metadata.title(), "FAILED",
+                    messages.get(MessageKeys.DOCUMENT_UPLOAD_FAILURE));
+        } finally {
+            deleteQuietly(quarantinedFile);
+            if (!persisted) {
+                deleteQuietly(storedFile);
+            }
+        }
+    }
+
+    private DocumentUploadResult replaceDraft(
+            String username,
+            UploadUser user,
+            DocumentUploadMetadata metadata,
+            MultipartFile file,
+            String remoteAddress) {
+        Path stagedFile = null;
+        Path priorBackup = null;
+        boolean persisted = false;
+        try {
+            validateMaintenanceIdentity(metadata);
+            validateMetadata(metadata, false);
+            LocalDate documentDate = parseDate(metadata.documentDate(), "documentDate");
+            LocalDate expiryDate = parseOptionalDate(metadata.expiryDate(), "expiryDate");
+            validateDateOrder(documentDate, expiryDate);
+            AuthorizedDocumentType documentType = validateTargetDocumentMetadata(username, user, metadata);
+            DocumentStorageRecord current = persistenceService.findVisibleStorageRecord(
+                            username, metadata.imageId(), metadata.version())
+                    .orElseThrow(DocumentNotAccessibleException::new);
+            Path currentFile = resolveStoredFile(current);
+            if (!Files.isRegularFile(currentFile) || !Files.isReadable(currentFile)) {
+                throw new DocumentUploadException("NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND));
+            }
+
+            String extension = fileValidator.validateAndGetExtension(file);
+            String actualFileName = actualFileName(file);
+            String storedFileName = metadata.imageId() + "_" + metadata.version() + "." + extension;
+            LocalDate storageDate = LocalDate.now();
+            String relativeDirectory = "/" + storageDate.getYear()
+                    + "/" + storageDate.format(MONTH_DIRECTORY)
+                    + "/" + String.format(Locale.ROOT, "%02d", storageDate.getDayOfMonth());
+            Path relativePath = Path.of(
+                    Integer.toString(storageDate.getYear()),
+                    storageDate.format(MONTH_DIRECTORY),
+                    String.format(Locale.ROOT, "%02d", storageDate.getDayOfMonth()));
+            Path targetDirectory = storagePath.resolve(relativePath).normalize();
+            Files.createDirectories(targetDirectory);
+            Path targetFile = targetDirectory.resolve(storedFileName).normalize();
+            ensureWithinStorage(targetFile);
+            if (Files.exists(targetFile) && !targetFile.equals(currentFile)) {
+                throw new DocumentUploadException("CONFLICT", messages.get(MessageKeys.DOCUMENT_FILE_CONFLICT));
+            }
+
+            FileDetails fileDetails;
+            if (clamAvEnabled) {
+                Files.createDirectories(quarantinePath);
+                stagedFile = quarantinePath.resolve(UUID.randomUUID() + ".quarantine");
+                fileDetails = copyAndHash(file.getInputStream(), stagedFile);
+                fileValidator.validateSignature(stagedFile, extension);
+                scanFile(stagedFile);
+            } else {
+                stagedFile = targetDirectory.resolve(UUID.randomUUID() + ".upload");
+                fileDetails = copyAndHash(file.getInputStream(), stagedFile);
+                fileValidator.validateSignature(stagedFile, extension);
+            }
+
+            priorBackup = currentFile.resolveSibling(currentFile.getFileName() + "." + UUID.randomUUID() + ".backup");
+            Files.move(currentFile, priorBackup);
+            try {
+                moveApprovedFile(stagedFile, targetFile);
+                stagedFile = null;
+                String approvalStatus = "AUTO".equalsIgnoreCase(documentType.approvalType().trim()) ? "A" : "P";
+                persistenceService.replaceDraft(
+                        new DocumentMaintenanceRecord(
+                                metadata.imageId(), metadata.version(), metadata.documentTypeCode(),
+                                metadata.referenceCode(), documentDate, expiryDate, metadata.title().trim(),
+                                metadata.additionalInformation(), username, "DOC_UPLOAD",
+                                "Replaced draft document file", "Draft document file replaced successfully.",
+                                remoteAddress),
+                        relativeDirectory, storedFileName, actualFileName, extension,
+                        fileDetails.size(), fileDetails.sha256(), approvalStatus);
+                persisted = true;
+                deleteQuietly(priorBackup);
+                priorBackup = null;
+                boolean autoApproved = "A".equals(approvalStatus);
+                return new DocumentUploadResult(
+                        metadata.clientDocumentId(), metadata.imageId(), metadata.title().trim(),
+                        autoApproved ? "APPROVED" : "PENDING_APPROVAL",
+                        messages.get(autoApproved
+                                ? MessageKeys.DOCUMENT_UPLOAD_SUCCESS_APPROVED
+                                : MessageKeys.DOCUMENT_UPLOAD_SUCCESS_PENDING));
+            } catch (Exception exception) {
+                deleteQuietly(targetFile);
+                Files.move(priorBackup, currentFile, StandardCopyOption.REPLACE_EXISTING);
+                priorBackup = null;
+                throw exception;
+            }
+        } catch (DocumentUploadException exception) {
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), null, metadata.title(),
+                    exception.status(), exception.publicMessage());
+        } catch (DocumentNotAccessibleException exception) {
+            return rejectedWithMessage(
+                    metadata, messages.get(MessageKeys.DOCUMENT_NOT_FOUND_OR_UNAUTHORIZED));
+        } catch (IllegalArgumentException exception) {
+            return rejectedWithMessage(metadata, exception.getMessage());
+        } catch (Exception exception) {
+            log.error("Draft document replacement failed; imageId={}, username={}",
+                    metadata.imageId(), username, exception);
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), null, metadata.title(), "FAILED",
+                    messages.get(MessageKeys.DOCUMENT_UPLOAD_FAILURE));
+        } finally {
+            deleteQuietly(stagedFile);
+            if (!persisted && priorBackup != null && Files.exists(priorBackup)) {
+                log.error("Draft file backup remains after failed replacement; backupPath={}", priorBackup);
+            }
+        }
+    }
+
+    private DocumentUploadResult deleteDraft(
+            String username,
+            DocumentUploadMetadata metadata,
+            String remoteAddress) {
+        Path backupFile = null;
+        try {
+            validateMaintenanceIdentity(metadata);
+            DocumentStorageRecord current = persistenceService.findVisibleStorageRecord(
+                            username, metadata.imageId(), metadata.version())
+                    .orElseThrow(DocumentNotAccessibleException::new);
+            Path currentFile = resolveStoredFile(current);
+            if (!Files.isRegularFile(currentFile) || !Files.isReadable(currentFile)) {
+                throw new DocumentUploadException("NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND));
+            }
+            backupFile = currentFile.resolveSibling(
+                    currentFile.getFileName() + "." + UUID.randomUUID() + ".delete");
+            Files.move(currentFile, backupFile);
+            try {
+                persistenceService.deleteDocument(
+                        username, metadata.imageId(), metadata.version(), remoteAddress);
+                deleteQuietly(backupFile);
+                backupFile = null;
+                return new DocumentUploadResult(
+                        metadata.clientDocumentId(), metadata.imageId(), metadata.title(),
+                        "DELETED", messages.get(MessageKeys.DOCUMENT_DELETED));
+            } catch (Exception exception) {
+                Files.move(backupFile, currentFile, StandardCopyOption.REPLACE_EXISTING);
+                backupFile = null;
+                throw exception;
+            }
+        } catch (DocumentNotAccessibleException exception) {
+            return rejectedWithMessage(
+                    metadata, messages.get(MessageKeys.DOCUMENT_NOT_FOUND_OR_UNAUTHORIZED));
+        } catch (DocumentUploadException exception) {
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), null, metadata.title(),
+                    exception.status(), exception.publicMessage());
+        } catch (IllegalArgumentException exception) {
+            return rejectedWithMessage(metadata, exception.getMessage());
+        } catch (Exception exception) {
+            log.error("Draft document deletion failed; imageId={}, username={}",
+                    metadata.imageId(), username, exception);
+            return new DocumentUploadResult(
+                    metadata.clientDocumentId(), null, metadata.title(), "FAILED",
+                    messages.get(MessageKeys.DOCUMENT_UPLOAD_FAILURE));
+        } finally {
+            if (backupFile != null && Files.exists(backupFile)) {
+                log.error("Deleted document backup remains after failed deletion; backupPath={}", backupFile);
+            }
+        }
     }
 
     private DocumentUploadResult uploadOne(
@@ -108,7 +469,8 @@ public class DocumentUploadService {
             UploadUser user,
             DocumentUploadMetadata metadata,
             MultipartFile file,
-            String remoteAddress) {
+            String remoteAddress,
+            String action) {
         Path quarantinedFile = null;
         Path storedFile = null;
         boolean persisted = false;
@@ -168,7 +530,7 @@ public class DocumentUploadService {
                 quarantinedFile = null;
                 internalDocumentId = persistDocument(username, metadata, documentType, documentDate, expiryDate,
                         imageId, INITIAL_DOCUMENT_VERSION, storedFileName, actualFileName, extension,
-                        fileDetails, relativeDirectory, remoteAddress);
+                        fileDetails, relativeDirectory, remoteAddress, action);
             } else {
                 Path targetDirectory = storagePath.resolve(relativePath).normalize();
                 Files.createDirectories(targetDirectory);
@@ -178,21 +540,23 @@ public class DocumentUploadService {
                 fileValidator.validateSignature(storedFile, extension);
                 internalDocumentId = persistDocument(username, metadata, documentType, documentDate, expiryDate,
                         imageId, INITIAL_DOCUMENT_VERSION, storedFileName, actualFileName, extension,
-                        fileDetails, relativeDirectory, remoteAddress);
+                        fileDetails, relativeDirectory, remoteAddress, action);
             }
 
             persisted = true;
             log.info("Document upload completed; documentId={}, imageId={}, clientDocumentId={}, username={}",
                     internalDocumentId, imageId, metadata.clientDocumentId(), username);
             boolean autoApproved = "AUTO".equalsIgnoreCase(documentType.approvalType().trim());
+            boolean draft = "DRAFT".equals(action);
             return new DocumentUploadResult(
                     metadata.clientDocumentId(),
                     imageId,
                     metadata.title().trim(),
-                    autoApproved ? "APPROVED" : "PENDING_APPROVAL",
-                    messages.get(autoApproved
-                            ? MessageKeys.DOCUMENT_UPLOAD_SUCCESS_APPROVED
-                            : MessageKeys.DOCUMENT_UPLOAD_SUCCESS_PENDING));
+                    draft ? "DRAFT" : autoApproved ? "APPROVED" : "PENDING_APPROVAL",
+                    draft ? messages.get(MessageKeys.DOCUMENT_DRAFT_SAVED)
+                            : messages.get(autoApproved
+                                ? MessageKeys.DOCUMENT_UPLOAD_SUCCESS_APPROVED
+                                : MessageKeys.DOCUMENT_UPLOAD_SUCCESS_PENDING));
         } catch (DocumentUploadException exception) {
             log.warn("Document upload rejected or failed; clientDocumentId={}, username={}, status={}, reason={}",
                     metadata.clientDocumentId(), username, exception.status(), exception.publicMessage());
@@ -225,8 +589,11 @@ public class DocumentUploadService {
             String extension,
             FileDetails fileDetails,
             String relativeDirectory,
-            String remoteAddress) {
-        String approvalStatus = "AUTO".equalsIgnoreCase(documentType.approvalType().trim()) ? "A" : "P";
+            String remoteAddress,
+            String action) {
+        String approvalStatus = "DRAFT".equals(action)
+                ? "I"
+                : "AUTO".equalsIgnoreCase(documentType.approvalType().trim()) ? "A" : "P";
         return persistenceService.persist(new DocumentRecord(
                 imageId,
                 version,
@@ -245,7 +612,7 @@ public class DocumentUploadService {
                 fileDetails.size(),
                 fileDetails.sha256(),
                 remoteAddress
-        ));
+        ), action);
     }
 
     private String actualFileName(MultipartFile file) {
@@ -290,12 +657,12 @@ public class DocumentUploadService {
 
     private record FileDetails(long size, String sha256) {}
 
-    private MultipartFile resolveFile(
+    private MultipartFile resolveActionFile(
             DocumentUploadMetadata metadata,
-            int index,
             List<MultipartFile> orderedFiles,
             Map<String, MultipartFile> namedFiles,
-            Set<String> usedFileParts) {
+            Set<String> usedFileParts,
+            int orderedFileIndex) {
         if (metadata.filePart() != null && !metadata.filePart().isBlank()) {
             String filePart = metadata.filePart().trim();
             if (!usedFileParts.add(filePart)) {
@@ -303,41 +670,122 @@ public class DocumentUploadService {
             }
             return namedFiles.get(filePart);
         }
-        if (index >= orderedFiles.size()) {
-            return null;
-        }
-        return orderedFiles.get(index);
+        return orderedFileIndex < orderedFiles.size() ? orderedFiles.get(orderedFileIndex) : null;
     }
 
-    private void validateFileParts(
+    private void validateActionFileParts(
             DocumentUploadBatchMetadata batch,
             List<MultipartFile> orderedFiles,
             Map<String, MultipartFile> namedFiles) {
-        boolean orderedMode = !orderedFiles.isEmpty()
-                || batch.documents().stream().anyMatch(document ->
-                document == null || document.filePart() == null || document.filePart().isBlank());
-        if (orderedMode) {
-            if (orderedFiles.size() > batch.documents().size()
-                    || batch.documents().stream().anyMatch(document ->
-                    document != null && document.filePart() != null && !document.filePart().isBlank())
-                    || namedFiles.keySet().stream().anyMatch(partName -> !"files".equals(partName))) {
-                throw new DocumentUploadException(
-                        "REJECTED", messages.get(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_MODE_INVALID));
+        boolean hasNamedParts = namedFiles.keySet().stream().anyMatch(part -> !"files".equals(part));
+        if (hasNamedParts) {
+            if (!orderedFiles.isEmpty() || namedFiles.containsKey("files")) {
+                throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_MODE_INVALID);
+            }
+            Set<String> requestedParts = new HashSet<>();
+            for (DocumentUploadMetadata metadata : batch.documents()) {
+                if (metadata == null) {
+                    continue;
+                }
+                boolean needsFile = requiresFile(actionOf(metadata, batch));
+                String part = metadata.filePart() == null ? "" : metadata.filePart().trim();
+                if (needsFile != !part.isBlank() || (!part.isBlank() && !requestedParts.add(part))) {
+                    throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_INVALID);
+                }
+            }
+            if (!requestedParts.equals(namedFiles.keySet())) {
+                throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_UNREFERENCED);
             }
             return;
         }
 
-        Set<String> requestedParts = new HashSet<>();
-        for (DocumentUploadMetadata document : batch.documents()) {
-            if (document == null || document.filePart() == null || document.filePart().isBlank()
-                    || !requestedParts.add(document.filePart().trim())) {
-                throw new DocumentUploadException(
-                        "REJECTED", messages.get(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_INVALID));
-            }
+        if (batch.documents().stream()
+                .anyMatch(metadata -> metadata != null && !isBlank(metadata.filePart()))) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_MODE_INVALID);
         }
-        if (!requestedParts.containsAll(namedFiles.keySet())) {
+        long requiredFileCount = batch.documents().stream()
+                .filter(metadata -> metadata != null && requiresFile(actionOf(metadata, batch)))
+                .count();
+        if (requiredFileCount != orderedFiles.size()
+                || namedFiles.keySet().stream().anyMatch(part -> !"files".equals(part))) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_MODE_INVALID);
+        }
+    }
+
+    private String actionOf(DocumentUploadMetadata metadata, DocumentUploadBatchMetadata batch) {
+        if (batch.kind() != null && "editdraft".equalsIgnoreCase(batch.kind().trim())) {
+            return "EDIT_DRAFT";
+        }
+        String action = metadata.action();
+        if (action == null || action.isBlank()) {
+            action = batch.action();
+        }
+        return action == null || action.isBlank()
+                ? "SUBMIT"
+                : action.trim().toUpperCase(Locale.ROOT).replace('-', '_');
+    }
+
+    private boolean requiresFile(String action) {
+        return "SUBMIT".equals(action) || "DRAFT".equals(action)
+                || "EDITDRAFT".equals(action) || "EDIT_DRAFT".equals(action);
+    }
+
+    private Path resolveStoredFile(DocumentStorageRecord document) {
+        if (document.relativePath() == null || document.storedFileName() == null
+                || document.storedFileName().isBlank()) {
+            throw new DocumentUploadException("NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND));
+        }
+        String relativePathValue = document.relativePath().replace('\\', '/');
+        while (relativePathValue.startsWith("/")) {
+            relativePathValue = relativePathValue.substring(1);
+        }
+        if (relativePathValue.isBlank()) {
+            throw new DocumentUploadException("NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND));
+        }
+        Path relativeDirectory = Path.of(relativePathValue).normalize();
+        Path fileName = Path.of(document.storedFileName());
+        if (relativeDirectory.isAbsolute() || relativeDirectory.startsWith("..")
+                || fileName.isAbsolute() || fileName.getNameCount() != 1 || fileName.startsWith("..")) {
+            throw new DocumentUploadException("NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND));
+        }
+        Path resolved = storagePath.resolve(relativeDirectory).resolve(fileName).normalize();
+        if (!resolved.startsWith(storagePath)) {
+            throw new DocumentUploadException("NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND));
+        }
+        try {
+            Path realRoot = storagePath.toRealPath();
+            Path realFile = resolved.toRealPath();
+            if (!realFile.startsWith(realRoot)) {
+                throw new DocumentUploadException(
+                        "NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND));
+            }
+            return realFile;
+        } catch (IOException exception) {
             throw new DocumentUploadException(
-                    "REJECTED", messages.get(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_UNREFERENCED));
+                    "NOT_FOUND", messages.get(MessageKeys.DOCUMENT_FILE_NOT_FOUND), exception);
+        }
+    }
+
+    private void scanFile(Path file) throws IOException {
+        try {
+            clamAvScanner.scan(file);
+        } catch (ClamAvScanner.InfectedFileException exception) {
+            throw new DocumentUploadException(
+                    "REJECTED", messages.get(MessageKeys.DOCUMENT_UPLOAD_MALWARE_DETECTED), exception);
+        } catch (IOException exception) {
+            throw new DocumentUploadException(
+                    "FAILED", messages.get(MessageKeys.DOCUMENT_UPLOAD_SCANNER_UNAVAILABLE), exception);
+        }
+    }
+
+    private void validateNoFiles(
+            DocumentUploadBatchMetadata batch,
+            List<MultipartFile> orderedFiles,
+            Map<String, MultipartFile> namedFiles) {
+        if (!orderedFiles.isEmpty() || !namedFiles.isEmpty()
+                || batch.documents().stream().anyMatch(document ->
+                document != null && !isBlank(document.filePart()))) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_PARTS_MODE_INVALID);
         }
     }
 
@@ -352,10 +800,14 @@ public class DocumentUploadService {
     }
 
     private void validateMetadata(DocumentUploadMetadata metadata) {
+        validateMetadata(metadata, true);
+    }
+
+    private void validateMetadata(DocumentUploadMetadata metadata, boolean requireReferenceType) {
         if (metadata == null
                 || isBlank(metadata.referenceCode())
-                || isBlank(metadata.referenceType())
-                || !REFERENCE_TYPES.contains(metadata.referenceType())
+                || (requireReferenceType && (isBlank(metadata.referenceType())
+                || !REFERENCE_TYPES.contains(metadata.referenceType())))
                 || isBlank(metadata.categoryCode())
                 || metadata.categoryCode().length() > 100
                 || isBlank(metadata.documentTypeCode())
@@ -373,6 +825,43 @@ public class DocumentUploadService {
         }
         if (metadata.additionalInformation() != null && metadata.additionalInformation().length() > 10000) {
             throw rejected(MessageKeys.DOCUMENT_UPLOAD_ADDITIONAL_INFORMATION_TOO_LONG);
+        }
+    }
+
+    private void validateMaintenanceIdentity(DocumentUploadMetadata metadata) {
+        if (metadata.imageId() == null || metadata.imageId() < 1
+                || metadata.version() == null || metadata.version() < 1) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_METADATA_FIELDS_INVALID);
+        }
+    }
+
+    private long requestedImageId(DocumentUploadMetadata metadata) {
+        Long imageId = metadata.imageId() != null ? metadata.imageId() : metadata.clientDocumentId();
+        if (imageId == null || imageId < 1) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_METADATA_FIELDS_INVALID);
+        }
+        return imageId;
+    }
+
+    private AuthorizedDocumentType validateTargetDocumentMetadata(
+            String username, UploadUser user, DocumentUploadMetadata metadata) {
+        if (!documentUploadRepository.hasEntityVisibility(user.userCode(), metadata.referenceCode())) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_REFERENCE_UNAUTHORIZED);
+        }
+        AuthorizedDocumentType documentType = documentUploadRepository.findAuthorizedDocumentType(
+                        username, metadata.documentTypeCode(), metadata.categoryCode())
+                .orElseThrow(() -> rejected(MessageKeys.DOCUMENT_UPLOAD_TYPE_UNAUTHORIZED));
+        validateAgainstDocumentType(metadata, documentType);
+        return documentType;
+    }
+
+    private LocalDate parseOptionalDate(String value, String fieldName) {
+        return value == null || value.isBlank() ? null : parseDate(value, fieldName);
+    }
+
+    private void validateDateOrder(LocalDate documentDate, LocalDate expiryDate) {
+        if (expiryDate != null && expiryDate.isBefore(documentDate)) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_EXPIRY_BEFORE_DOCUMENT);
         }
     }
 
@@ -426,6 +915,16 @@ public class DocumentUploadService {
                 metadata == null ? null : metadata.title(),
                 "REJECTED",
                 messages.get(messageKey));
+    }
+
+    private DocumentUploadResult rejectedWithMessage(
+            DocumentUploadMetadata metadata, String message) {
+        return new DocumentUploadResult(
+                metadata.clientDocumentId(),
+                null,
+                metadata.title(),
+                "REJECTED",
+                message);
     }
 
     private DocumentUploadException rejected(String messageKey) {

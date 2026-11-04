@@ -24,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/documents")
@@ -53,7 +54,9 @@ public class DocumentUploadController {
         DocumentUploadBatchMetadata metadata = parseMetadata(metadataJson);
         MultiValueMap<String, MultipartFile> multipartFiles = multipartRequest.getMultiFileMap();
         List<MultipartFile> orderedFiles = multipartFiles.getOrDefault("files", List.of());
-        Map<String, MultipartFile> namedFiles = multipartRequest.getFileMap();
+        Map<String, MultipartFile> namedFiles = multipartRequest.getFileMap().entrySet().stream()
+                .filter(entry -> !"metadata".equals(entry.getKey()))
+                .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
         try {
             return documentUploadService.upload(
                     authentication.getName(), metadata, orderedFiles, namedFiles,
