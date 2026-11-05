@@ -31,5 +31,7 @@ public record DocumentSearchItem(
         boolean physicalStorageRequired,
         String categoryDescription,
         int dayPending,
-        boolean overDue
+        boolean overDue,
+        Integer daysRemaining,
+        String expiryStatus
 ) {}

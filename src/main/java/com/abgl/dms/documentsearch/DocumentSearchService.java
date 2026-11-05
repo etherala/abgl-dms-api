@@ -25,6 +25,9 @@ public class DocumentSearchService {
         validateDateRange(request.uploadDateFrom(), request.uploadDateTo(), "upload date");
         validateDateRange(request.documentDateFrom(), request.documentDateTo(), "document date");
         validateDateRange(request.expiryDateFrom(), request.expiryDateTo(), "expiry date");
+        if (request.maxDaysRemaining() != null && request.maxDaysRemaining() < 0) {
+            throw new IllegalArgumentException("Maximum days remaining must not be negative");
+        }
 
         int page = request.page() == null ? DEFAULT_PAGE : request.page();
         int pageSize = request.pageSize() == null ? DEFAULT_PAGE_SIZE : request.pageSize();

@@ -69,7 +69,8 @@ public class DocumentSearchRepository {
                    dt.master_retention_code,
                    dt.physical_storage_required,
                    amd.md_desc AS category_description,
-                   (CURRENT_DATE - dm.created_datetime::date)::int AS day_pending
+                   (CURRENT_DATE - dm.created_datetime::date)::int AS day_pending,
+                   (dm.expiry_date - CURRENT_DATE)::int AS days_remaining
             """ + FROM_AND_ACCESS;
 
     private static final String COUNT_DOCUMENTS =
@@ -107,15 +108,24 @@ public class DocumentSearchRepository {
 
     private final JdbcTemplate jdbcTemplate;
     private final int approvalDays;
+    private final int expiryAlertMinimumDays;
+    private final int expiryAlertMaximumDays;
 
     public DocumentSearchRepository(
             JdbcTemplate jdbcTemplate,
-            @Value("${document.approval.days:3}") int approvalDays) {
+            @Value("${document.approval.days:3}") int approvalDays,
+            @Value("${document.expiry.alert.minimum-days:30}") int expiryAlertMinimumDays,
+            @Value("${document.expiry.alert.maximum-days:90}") int expiryAlertMaximumDays) {
         this.jdbcTemplate = jdbcTemplate;
         if (approvalDays < 0) {
             throw new IllegalArgumentException("Document approval days must not be negative");
         }
+        if (expiryAlertMinimumDays < 0 || expiryAlertMaximumDays < expiryAlertMinimumDays) {
+            throw new IllegalArgumentException("Expiry alert periods must be non-negative and maximum >= minimum");
+        }
         this.approvalDays = approvalDays;
+        this.expiryAlertMinimumDays = expiryAlertMinimumDays;
+        this.expiryAlertMaximumDays = expiryAlertMaximumDays;
     }
 
     public long countVisibleDocuments(String username, DocumentSearchRequest request) {
@@ -165,36 +175,56 @@ public class DocumentSearchRepository {
                           ORDER BY dm.created_datetime DESC, dm.image_id DESC, dm.version DESC
                           LIMIT ? OFFSET ?
                           """,
-                (resultSet, rowNumber) -> new DocumentSearchItem(
-                        resultSet.getLong("document_type_id"),
-                        resultSet.getString("document_type_code"),
-                        resultSet.getString("approval_type"),
-                        resultSet.getBoolean("critical_indicator"),
-                        resultSet.getBoolean("expiry_date_mandatory"),
-                        resultSet.getLong("image_id"),
-                        resultSet.getInt("version"),
-                        resultSet.getString("reference_code"),
-                        resultSet.getObject("document_date", java.time.LocalDate.class),
-                        resultSet.getObject("expiry_date", java.time.LocalDate.class),
-                        resultSet.getString("title"),
-                        resultSet.getString("additional_information"),
-                        resultSet.getString("approval_status"),
-                        resultSet.getString("uploaded_by"),
-                        resultSet.getObject("uploaded_on", java.time.OffsetDateTime.class),
-                        resultSet.getString("doc_store_path"),
-                        resultSet.getString("doc_file_name"),
-                        resultSet.getObject("doc_size", Long.class),
-                        resultSet.getString("doc_actual_file_name"),
-                        resultSet.getString("entity_name"),
-                        resultSet.getString("document_type_name"),
-                        resultSet.getBigDecimal("retention_period_value"),
-                        resultSet.getString("master_retention_code"),
-                        resultSet.getBoolean("physical_storage_required"),
-                        resultSet.getString("category_description"),
-                        resultSet.getInt("day_pending"),
-                        resultSet.getInt("day_pending") > approvalDays
-                ),
+                (resultSet, rowNumber) -> {
+                    Integer daysRemaining = resultSet.getObject("days_remaining", Integer.class);
+                    return new DocumentSearchItem(
+                            resultSet.getLong("document_type_id"),
+                            resultSet.getString("document_type_code"),
+                            resultSet.getString("approval_type"),
+                            resultSet.getBoolean("critical_indicator"),
+                            resultSet.getBoolean("expiry_date_mandatory"),
+                            resultSet.getLong("image_id"),
+                            resultSet.getInt("version"),
+                            resultSet.getString("reference_code"),
+                            resultSet.getObject("document_date", java.time.LocalDate.class),
+                            resultSet.getObject("expiry_date", java.time.LocalDate.class),
+                            resultSet.getString("title"),
+                            resultSet.getString("additional_information"),
+                            resultSet.getString("approval_status"),
+                            resultSet.getString("uploaded_by"),
+                            resultSet.getObject("uploaded_on", java.time.OffsetDateTime.class),
+                            resultSet.getString("doc_store_path"),
+                            resultSet.getString("doc_file_name"),
+                            resultSet.getObject("doc_size", Long.class),
+                            resultSet.getString("doc_actual_file_name"),
+                            resultSet.getString("entity_name"),
+                            resultSet.getString("document_type_name"),
+                            resultSet.getBigDecimal("retention_period_value"),
+                            resultSet.getString("master_retention_code"),
+                            resultSet.getBoolean("physical_storage_required"),
+                            resultSet.getString("category_description"),
+                            resultSet.getInt("day_pending"),
+                            resultSet.getInt("day_pending") > approvalDays,
+                            daysRemaining,
+                            expiryStatus(daysRemaining));
+                },
                 parameters.toArray());
+    }
+
+    private String expiryStatus(Integer daysRemaining) {
+        if (daysRemaining == null) {
+            return "NE";
+        }
+        if (daysRemaining <= 0) {
+            return "OE";
+        }
+        if (daysRemaining <= expiryAlertMinimumDays) {
+            return "ES";
+        }
+        if (daysRemaining <= expiryAlertMaximumDays) {
+            return "DS";
+        }
+        return "VE";
     }
 
     private static final String SELECT_APPROVAL_DOCS = SELECT_DOCUMENTS;
@@ -239,6 +269,11 @@ public class DocumentSearchRepository {
                 request.documentDateFrom(), request.documentDateTo());
         addDateRange(where, parameters, "dm.expiry_date",
                 request.expiryDateFrom(), request.expiryDateTo());
+        if (request.maxDaysRemaining() != null) {
+            where.append(" AND (dm.expiry_date - CURRENT_DATE) <= ?");
+            parameters.add(request.maxDaysRemaining());
+        }
+        addExpiryStatusFilter(where, parameters, request.expiryStatus());
         addExactFilter(where, parameters, "dm.approval_status", request.status());
         addCaseInsensitiveExactFilter(where, parameters, "dm.created_by", submittedBy);
         return new QueryParts(where.toString(), parameters);
@@ -249,6 +284,34 @@ public class DocumentSearchRepository {
         if (value != null && !value.isBlank()) {
             where.append(" AND LOWER(").append(column).append(") = LOWER(?)");
             parameters.add(value.trim());
+        }
+    }
+
+    private void addExpiryStatusFilter(
+            StringBuilder where, List<Object> parameters, String expiryStatus) {
+        if (expiryStatus == null || expiryStatus.isBlank()) {
+            return;
+        }
+        switch (expiryStatus.trim().toUpperCase(java.util.Locale.ROOT)) {
+            case "DS" -> {
+                where.append(" AND (dm.expiry_date - CURRENT_DATE) > ?")
+                        .append(" AND (dm.expiry_date - CURRENT_DATE) <= ?");
+                parameters.add(expiryAlertMinimumDays);
+                parameters.add(expiryAlertMaximumDays);
+            }
+            case "ES" -> {
+                where.append(" AND (dm.expiry_date - CURRENT_DATE) > 0")
+                        .append(" AND (dm.expiry_date - CURRENT_DATE) <= ?");
+                parameters.add(expiryAlertMinimumDays);
+            }
+            case "VE" -> {
+                where.append(" AND (dm.expiry_date - CURRENT_DATE) > ?");
+                parameters.add(expiryAlertMaximumDays);
+            }
+            case "NE" -> where.append(" AND dm.expiry_date IS NULL");
+            case "OE" -> where.append(" AND (dm.expiry_date - CURRENT_DATE) <= 0");
+            default -> throw new IllegalArgumentException(
+                    "Expiry status must be one of DS, ES, VE, NE, or OE");
         }
     }
 

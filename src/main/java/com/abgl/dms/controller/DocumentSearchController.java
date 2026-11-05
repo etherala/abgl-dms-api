@@ -6,6 +6,8 @@ import com.abgl.dms.documentsearch.DocumentSearchService;
 import com.abgl.dms.documentsearch.ApprovalDocumentSearchPage;
 import com.abgl.dms.documentsearch.ApprovalDocumentSearchRequest;
 import com.abgl.dms.documentsearch.ApprovalDocumentSearchService;
+import com.abgl.dms.documentsearch.ExpiryTrackingSearchRequest;
+import com.abgl.dms.documentsearch.ExpiryTrackingSearchService;
 import com.abgl.dms.documentsearch.DocumentFileResponse;
 import com.abgl.dms.documentsearch.DocumentFileService;
 import org.springframework.core.io.Resource;
@@ -32,14 +34,17 @@ public class DocumentSearchController {
 
     private final DocumentSearchService documentSearchService;
     private final ApprovalDocumentSearchService approvalDocumentSearchService;
+    private final ExpiryTrackingSearchService expiryTrackingSearchService;
     private final DocumentFileService documentFileService;
 
     public DocumentSearchController(
             DocumentSearchService documentSearchService,
             ApprovalDocumentSearchService approvalDocumentSearchService,
+            ExpiryTrackingSearchService expiryTrackingSearchService,
             DocumentFileService documentFileService) {
         this.documentSearchService = documentSearchService;
         this.approvalDocumentSearchService = approvalDocumentSearchService;
+        this.expiryTrackingSearchService = expiryTrackingSearchService;
         this.documentFileService = documentFileService;
     }
 
@@ -60,6 +65,17 @@ public class DocumentSearchController {
             @RequestBody ApprovalDocumentSearchRequest request) {
         try {
             return approvalDocumentSearchService.search(authentication.getName(), request);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        }
+    }
+
+    @PostMapping("/expiry-tracking/search")
+    public DocumentSearchPage searchForExpiryTracking(
+            Authentication authentication,
+            @RequestBody ExpiryTrackingSearchRequest request) {
+        try {
+            return expiryTrackingSearchService.search(authentication.getName(), request);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         }
