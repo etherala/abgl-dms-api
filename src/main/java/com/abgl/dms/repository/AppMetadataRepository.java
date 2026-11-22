@@ -11,8 +11,15 @@ import java.util.Objects;
 public class AppMetadataRepository {
 
     private static final String FIND_DROPLIST_METADATA = """
-            SELECT md_type, md_code, md_desc
+            SELECT md_type AS metadata_type,
+                   md_code AS metadata_code,
+                   md_desc AS metadata_description
             FROM dms.app_metadata_droplist
+            UNION ALL
+            SELECT sd_type AS metadata_type,
+                   sd_code AS metadata_code,
+                   sd_desc AS metadata_description
+            FROM dms.app_sysdata_droplist
             """;
 
     private final JdbcTemplate jdbcTemplate;
@@ -25,11 +32,11 @@ public class AppMetadataRepository {
         Map<String, Map<String, String>> valuesByType = new HashMap<>();
         jdbcTemplate.query(FIND_DROPLIST_METADATA, resultSet -> {
             String metadataType = Objects.requireNonNull(
-                    resultSet.getString("md_type"), "Metadata md_type must not be null");
+                    resultSet.getString("metadata_type"), "Metadata type must not be null");
             String metadataCode = Objects.requireNonNull(
-                    resultSet.getString("md_code"), "Metadata md_code must not be null");
+                    resultSet.getString("metadata_code"), "Metadata code must not be null");
             String metadataDescription = Objects.requireNonNull(
-                    resultSet.getString("md_desc"), "Metadata md_desc must not be null");
+                    resultSet.getString("metadata_description"), "Metadata description must not be null");
 
             Map<String, String> valuesByCode = valuesByType.computeIfAbsent(
                     metadataType, ignored -> new HashMap<>());

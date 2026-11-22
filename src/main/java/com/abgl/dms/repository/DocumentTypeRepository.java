@@ -18,7 +18,7 @@ public class DocumentTypeRepository {
                    description,
                    expiry_date_mandatory,
                    is_active
-            FROM dms.document_type
+            FROM dms.document_type_master
             WHERE document_category = ?
               AND is_active = TRUE
             ORDER BY document_type_name ASC, document_type_code ASC
