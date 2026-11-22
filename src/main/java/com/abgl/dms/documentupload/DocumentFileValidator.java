@@ -1,5 +1,7 @@
 package com.abgl.dms.documentupload;
 
+import com.abgl.dms.i18n.ApplicationMessages;
+import com.abgl.dms.i18n.MessageKeys;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
@@ -35,15 +37,18 @@ public class DocumentFileValidator {
     private final Set<String> allowedTypes;
     private final Set<String> notAllowedTypes;
     private final long maxFileSizeBytes;
+    private final ApplicationMessages messages;
 
     public DocumentFileValidator(
             @org.springframework.beans.factory.annotation.Value("${file.upload.allowed-types}") String allowedTypes,
             @org.springframework.beans.factory.annotation.Value("${file.upload.not-allowed-types}") String notAllowedTypes,
             @org.springframework.beans.factory.annotation.Value("${spring.servlet.multipart.max-file-size:10MB}")
-            org.springframework.util.unit.DataSize maxFileSize) {
+            org.springframework.util.unit.DataSize maxFileSize,
+            ApplicationMessages messages) {
         this.allowedTypes = csvSet(allowedTypes);
         this.notAllowedTypes = csvSet(notAllowedTypes);
         this.maxFileSizeBytes = maxFileSize.toBytes();
+        this.messages = messages;
         if (maxFileSizeBytes < 1) {
             throw new IllegalArgumentException("Upload file-size limit must be positive");
         }
@@ -51,25 +56,25 @@ public class DocumentFileValidator {
 
     public String validateAndGetExtension(MultipartFile file) {
         if (file.isEmpty() || file.getSize() == 0) {
-            throw rejected("Empty files are not allowed");
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_EMPTY_FILE);
         }
         if (file.getSize() > maxFileSizeBytes) {
-            throw new DocumentUploadException("REJECTED", "File exceeds the configured size limit");
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_TOO_LARGE);
         }
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || originalFilename.isBlank()) {
-            throw rejected("A filename with an allowed extension is required");
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILENAME_REQUIRED);
         }
 
         String normalizedFilename = originalFilename.replace('\\', '/');
         String filename = normalizedFilename.substring(normalizedFilename.lastIndexOf('/') + 1);
         int dot = filename.lastIndexOf('.');
         if (dot <= 0 || dot == filename.length() - 1) {
-            throw rejected("File extension is missing");
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_EXTENSION_MISSING);
         }
         String extension = filename.substring(dot + 1).toLowerCase(Locale.ROOT);
         if (notAllowedTypes.contains(extension) || !allowedTypes.contains(extension)) {
-            throw rejected("File type is not allowed");
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_FILE_TYPE_NOT_ALLOWED);
         }
         String claimedContentType = file.getContentType();
         String normalizedClaimedType = claimedContentType == null
@@ -79,7 +84,7 @@ public class DocumentFileValidator {
                 && !MediaType.APPLICATION_OCTET_STREAM_VALUE.equalsIgnoreCase(normalizedClaimedType)) {
             String expectedType = EXPECTED_MEDIA_TYPES.get(extension);
             if (expectedType == null || !expectedType.equalsIgnoreCase(normalizedClaimedType)) {
-                throw rejected("Claimed content type does not match the file extension");
+                throw rejected(MessageKeys.DOCUMENT_UPLOAD_CONTENT_TYPE_MISMATCH);
             }
         }
         return extension;
@@ -94,7 +99,7 @@ public class DocumentFileValidator {
         int headerLength = signature.length;
         System.arraycopy(signature, 0, header, 0, headerLength);
         if (headerLength < 1) {
-            throw rejected("Empty files are not allowed");
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_EMPTY_FILE);
         }
 
         boolean valid = switch (extension) {
@@ -114,7 +119,7 @@ public class DocumentFileValidator {
             default -> false;
         };
         if (!valid) {
-            throw rejected("File signature does not match its claimed extension");
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_SIGNATURE_MISMATCH);
         }
     }
 
@@ -160,7 +165,7 @@ public class DocumentFileValidator {
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
-    private DocumentUploadException rejected(String message) {
-        return new DocumentUploadException("REJECTED", message);
+    private DocumentUploadException rejected(String messageKey) {
+        return new DocumentUploadException("REJECTED", messages.get(messageKey));
     }
 }

@@ -1,19 +1,23 @@
 package com.abgl.dms.documentupload;
 
 import java.time.LocalDate;
-import java.util.UUID;
 
 public record DocumentRecord(
-        String imageId,
-        long documentCollectionId,
-        long documentTypeId,
-        long folderId,
-        String referenceType,
+        long imageId,
+        int version,
+        String documentType,
         String referenceCode,
         LocalDate documentDate,
         LocalDate expiryDate,
         String title,
         String additionalInformation,
-        UUID createdBy,
-        String entityCode
+        String approvalStatus,
+        String createdBy,
+        String docStorePath,
+        String docFileName,
+        String docActualFileName,
+        String docExtension,
+        long docSize,
+        String docHash,
+        String ipAddress
 ) {}
