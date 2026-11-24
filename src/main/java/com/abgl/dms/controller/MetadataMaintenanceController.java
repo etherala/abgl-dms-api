@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/metadata/maintenance")
@@ -69,21 +70,35 @@ public class MetadataMaintenanceController {
         return service.createDraft(input, authentication.getName(), request.getRemoteAddr());
     }
 
-    @PutMapping("/records/{id}/draft")
-    public MetadataMaintenanceRecord updateDraft(
+    @PostMapping("/records/{id}/draft")
+    public MetadataMaintenanceRecord createEditDraft(
             Authentication authentication,
             @PathVariable long id,
             @Valid @RequestBody MetadataMaintenanceInput input,
             HttpServletRequest request) {
-        return service.updateDraft(id, input, authentication.getName(), request.getRemoteAddr());
+        return service.createEditDraft(id, input, authentication.getName(), request.getRemoteAddr());
     }
 
-    @PostMapping("/records/{id}/submit")
+    @GetMapping("/workbench/{wbId}")
+    public MetadataMaintenanceRecord getWorkbench(@PathVariable UUID wbId) {
+        return service.getWorkbench(wbId);
+    }
+
+    @PutMapping("/workbench/{wbId}/draft")
+    public MetadataMaintenanceRecord updateDraft(
+            Authentication authentication,
+            @PathVariable UUID wbId,
+            @Valid @RequestBody MetadataMaintenanceInput input,
+            HttpServletRequest request) {
+        return service.updateDraft(wbId, input, authentication.getName(), request.getRemoteAddr());
+    }
+
+    @PostMapping("/workbench/{wbId}/submit")
     public MetadataMaintenanceRecord submit(
             Authentication authentication,
-            @PathVariable long id,
+            @PathVariable UUID wbId,
             HttpServletRequest request) {
-        return service.submit(id, authentication.getName(), request.getRemoteAddr());
+        return service.submit(wbId, authentication.getName(), request.getRemoteAddr());
     }
 
     @PutMapping("/records/{id}")
@@ -100,21 +115,29 @@ public class MetadataMaintenanceController {
         return Map.of("items", service.getPending());
     }
 
-    @PostMapping("/records/{id}/approve")
+    @PostMapping("/workbench/{wbId}/approve")
     public MetadataMaintenanceRecord approve(
             Authentication authentication,
-            @PathVariable long id,
+            @PathVariable UUID wbId,
             HttpServletRequest request) {
-        return service.approve(id, authentication.getName(), request.getRemoteAddr());
+        return service.approve(wbId, authentication.getName(), request.getRemoteAddr());
     }
 
-    @PostMapping("/records/{id}/reject")
+    @PostMapping("/workbench/{wbId}/reject")
     public MetadataMaintenanceRecord reject(
             Authentication authentication,
-            @PathVariable long id,
+            @PathVariable UUID wbId,
             @Valid @RequestBody MetadataMaintenanceRejection rejection,
             HttpServletRequest request) {
-        return service.reject(id, authentication.getName(), rejection.reason(), request.getRemoteAddr());
+        return service.reject(wbId, authentication.getName(), rejection.reason(), request.getRemoteAddr());
+    }
+
+    @DeleteMapping("/workbench/{wbId}")
+    public MetadataMaintenanceRecord deleteDraft(
+            Authentication authentication,
+            @PathVariable UUID wbId,
+            HttpServletRequest request) {
+        return service.deleteDraft(wbId, authentication.getName(), request.getRemoteAddr());
     }
 
     @DeleteMapping("/records/{id}")
@@ -128,6 +151,11 @@ public class MetadataMaintenanceController {
     @GetMapping("/records/{id}/audit")
     public List<MetadataMaintenanceAuditItem> getAudit(@PathVariable long id) {
         return service.getAudit(id);
+    }
+
+    @GetMapping("/workbench/{wbId}/audit")
+    public List<MetadataMaintenanceAuditItem> getWorkbenchAudit(@PathVariable UUID wbId) {
+        return service.getWorkbenchAudit(wbId);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

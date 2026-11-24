@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 @Service
 public class MetadataMaintenanceService {
@@ -62,13 +63,22 @@ public class MetadataMaintenanceService {
         return repository.createDraft(normalize(input), username, ipAddress);
     }
 
-    public MetadataMaintenanceRecord updateDraft(
+    public MetadataMaintenanceRecord createEditDraft(
             long id, MetadataMaintenanceInput input, String username, String ipAddress) {
-        return repository.updateDraft(id, normalize(input), username, ipAddress);
+        return repository.createEditDraft(id, normalize(input), username, ipAddress);
     }
 
-    public MetadataMaintenanceRecord submit(long id, String username, String ipAddress) {
-        return repository.submit(id, username, ipAddress);
+    public MetadataMaintenanceRecord updateDraft(
+            UUID wbId, MetadataMaintenanceInput input, String username, String ipAddress) {
+        return repository.updateDraft(wbId, normalize(input), username, ipAddress);
+    }
+
+    public MetadataMaintenanceRecord getWorkbench(UUID wbId) {
+        return repository.findWorkbench(wbId);
+    }
+
+    public MetadataMaintenanceRecord submit(UUID wbId, String username, String ipAddress) {
+        return repository.submit(wbId, username, ipAddress);
     }
 
     public MetadataMaintenanceRecord update(
@@ -80,26 +90,31 @@ public class MetadataMaintenanceService {
         return repository.findPending();
     }
 
-    public MetadataMaintenanceRecord approve(long id, String username, String ipAddress) {
-        MetadataMaintenanceRecord record = repository.approve(id, username, ipAddress);
+    public MetadataMaintenanceRecord approve(UUID wbId, String username, String ipAddress) {
+        MetadataMaintenanceRecord record = repository.approve(wbId, username, ipAddress);
         refreshDropList();
         return record;
     }
 
     public MetadataMaintenanceRecord reject(
-            long id, String username, String reason, String ipAddress) {
-        return repository.reject(id, username, reason, ipAddress);
+            UUID wbId, String username, String reason, String ipAddress) {
+        return repository.reject(wbId, username, reason, ipAddress);
     }
 
     public MetadataMaintenanceRecord delete(long id, String username, String ipAddress) {
-        MetadataMaintenanceRecord record = repository.delete(id, username, ipAddress);
-        refreshDropList();
-        return record;
+        return repository.delete(id, username, ipAddress);
+    }
+
+    public MetadataMaintenanceRecord deleteDraft(UUID wbId, String username, String ipAddress) {
+        return repository.deleteDraft(wbId, username, ipAddress);
     }
 
     public List<MetadataMaintenanceAuditItem> getAudit(long id) {
-        repository.findRecord(id);
         return repository.findAudit(id);
+    }
+
+    public List<MetadataMaintenanceAuditItem> getWorkbenchAudit(UUID wbId) {
+        return repository.findWorkbenchAudit(wbId);
     }
 
     private void refreshDropList() {
