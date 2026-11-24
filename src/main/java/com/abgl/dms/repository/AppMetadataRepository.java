@@ -15,6 +15,8 @@ public class AppMetadataRepository {
                    md_code AS metadata_code,
                    md_desc AS metadata_description
             FROM dms.app_metadata_droplist
+            WHERE is_active = true
+              AND status = 'A'
             UNION ALL
             SELECT sd_type AS metadata_type,
                    sd_code AS metadata_code,

@@ -6,6 +6,7 @@ import com.abgl.dms.auth.LoginRequest;
 import com.abgl.dms.repository.AppUserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,10 +76,10 @@ public class AuthController {
                     UsernamePasswordAuthenticationToken.unauthenticated(
                             request.username(), request.password()));
 
-            loginAttemptService.recordSuccess(authentication.getName());
-
             sessionAuthenticationStrategy.onAuthentication(
                     authentication, servletRequest, servletResponse);
+            String sessionId = servletRequest.getSession().getId();
+            loginAttemptService.recordSuccess(authentication.getName(), sessionId, servletRequest);
 
             SecurityContext context = SecurityContextHolder.createEmptyContext();
             context.setAuthentication(authentication);
@@ -88,13 +89,17 @@ public class AuthController {
             log.info("Login successful for username={}", authentication.getName());
             return ResponseEntity.noContent().build();
         } catch (AuthenticationException exception) {
-            if (exception instanceof BadCredentialsException) {
-                loginAttemptService.recordFailure(request.username());
-            }
+            loginAttemptService.recordFailure(
+                    request.username(),
+                    exception.getClass().getSimpleName(),
+                    servletRequest,
+                    exception instanceof BadCredentialsException);
             log.warn("Login rejected for username={}; reason={}",
                     request.username(), exception.getClass().getSimpleName());
             throw exception;
         } catch (ResponseStatusException exception) {
+            loginAttemptService.recordFailure(
+                    request.username(), "CAPTCHA_REJECTED", servletRequest, false);
             log.warn("Login CAPTCHA rejected for username={}; status={}",
                     request.username(), exception.getStatusCode().value());
             throw exception;
@@ -102,6 +107,23 @@ public class AuthController {
             log.error("Unexpected login failure for username={}", request.username(), exception);
             throw exception;
         }
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(Authentication authentication, HttpServletRequest request) {
+        HttpSession session = request.getSession(false);
+        if (session != null) {
+            try {
+                loginAttemptService.recordLogout(authentication.getName(), session.getId());
+            } finally {
+                session.invalidate();
+                SecurityContextHolder.clearContext();
+            }
+        } else {
+            SecurityContextHolder.clearContext();
+        }
+        log.info("Logout successful for username={}", authentication.getName());
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/session")
