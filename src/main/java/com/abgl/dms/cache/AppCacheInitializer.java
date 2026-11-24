@@ -26,11 +26,16 @@ public class AppCacheInitializer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        loadMetadataDropList();
+    }
+
+    public Map<String, Map<String, String>> loadMetadataDropList() {
         Map<String, Map<String, String>> valuesByType = appMetadataRepository.findDropListMetadata();
         MetadataDropList metadataDropList = new MetadataDropList(valuesByType);
         appCache.put(METADATA_DROPLIST, metadataDropList);
 
         int valueCount = valuesByType.values().stream().mapToInt(Map::size).sum();
         log.info("Loaded app metadata cache: types={}, values={}", valuesByType.size(), valueCount);
+        return valuesByType;
     }
 }
