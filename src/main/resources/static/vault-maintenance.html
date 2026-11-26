@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Vault Storage Maintenance</title>
+  <link rel="stylesheet" href="/vault-maintenance.css">
+  <script src="/vault-maintenance.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/vault-maintenance.html" aria-label="Vault Storage Maintenance home">
+        <span class="brand-mark" aria-hidden="true">V</span>
+        <span class="brand-copy"><strong>Vault</strong><small>Storage maintenance</small></span>
+      </a>
+      <div class="topbar-right">
+        <span class="secure-label"><span class="secure-dot" aria-hidden="true"></span> Secure workspace</span>
+        <div class="user-chip" id="user-chip" hidden>
+          <span class="user-avatar" id="user-avatar" aria-hidden="true"></span>
+          <span id="user-name"></span>
+        </div>
+      </div>
+    </header>
+
+    <main class="page-content">
+      <div class="breadcrumbs"><span>Administration</span><span aria-hidden="true">/</span><strong>Vault storage</strong></div>
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow">MASTER DATA</p>
+          <h1>Vault storage</h1>
+          <p class="page-description">Manage trays, track change requests, and review approvals.</p>
+        </div>
+        <button class="button button-primary" id="new-record" type="button">
+          <span aria-hidden="true">＋</span> Add vault tray
+        </button>
+      </section>
+
+      <div id="global-alert" class="alert" role="status" aria-live="polite" hidden></div>
+
+      <nav class="tabs" aria-label="Vault maintenance views">
+        <button class="tab is-active" id="records-tab" type="button" aria-selected="true">
+          <span class="tab-icon" aria-hidden="true">▤</span> Records
+        </button>
+        <button class="tab" id="review-tab" type="button" aria-selected="false">
+          <span class="tab-icon" aria-hidden="true">✓</span> Review queue
+          <span class="tab-count" id="pending-count" hidden>0</span>
+        </button>
+      </nav>
+
+      <section id="records-panel" class="panel" aria-labelledby="records-tab">
+        <div class="panel-heading">
+          <div>
+            <h2>Vault records</h2>
+            <p>Approved records and workbench requests are shown as separate rows.</p>
+          </div>
+          <button class="button button-subtle" id="refresh-records" type="button">
+            <span aria-hidden="true">↻</span> Refresh
+          </button>
+        </div>
+
+        <form id="search-form" class="filter-panel">
+          <div class="filter-heading">
+            <div class="filter-title"><span class="filter-icon" aria-hidden="true">⌕</span><h3>Search and filter</h3></div>
+            <button type="reset" class="text-button" id="clear-search">Clear filters</button>
+          </div>
+          <div class="filter-grid">
+            <label class="field"><span>Tray code</span><input name="vaultTrayCode" maxlength="100" placeholder="Search tray code"></label>
+            <label class="field"><span>Tray name</span><input name="vaultTrayName" maxlength="255" placeholder="Search tray name"></label>
+            <label class="field"><span>Location</span><select name="vaultLocation" data-dropdown="VAULT_LOCATION"><option value="">All locations</option></select></label>
+            <label class="field"><span>Branch</span><select name="vaultBranch" data-dropdown="VAULT_BRANCH"><option value="">All branches</option></select></label>
+            <label class="field"><span>Room</span><select name="vaultRoom" data-dropdown="VAULT_ROOM"><option value="">All rooms</option></select></label>
+            <label class="field"><span>Rack</span><select name="vaultRack" data-dropdown="VAULT_RACK"><option value="">All racks</option></select></label>
+            <label class="field"><span>Shelf</span><select name="vaultShelf" data-dropdown="VAULT_SHELF"><option value="">All shelves</option></select></label>
+            <label class="field"><span>Status</span>
+              <select name="status">
+                <option value="">All statuses</option>
+                <option value="A">Approved</option>
+                <option value="I">Draft</option>
+                <option value="P">Pending</option>
+                <option value="R">Rejected</option>
+                <option value="D">Closed</option>
+              </select>
+            </label>
+            <label class="field"><span>Active</span>
+              <select name="isActive"><option value="">All</option><option value="true">Active</option><option value="false">Inactive</option></select>
+            </label>
+            <label class="field"><span>Created by</span><input name="createdBy" maxlength="100" placeholder="Username"></label>
+          </div>
+          <div class="filter-actions">
+            <label class="field page-size"><span>Rows per page</span>
+              <select name="size"><option>25</option><option>50</option><option>100</option><option>200</option></select>
+            </label>
+            <button class="button button-primary" type="submit"><span aria-hidden="true">⌕</span> Search records</button>
+          </div>
+        </form>
+
+        <div class="results-bar">
+          <div><h3>Search results</h3><span class="result-count" id="result-count">—</span></div>
+          <span class="results-hint">Main records and workbench requests appear independently.</span>
+        </div>
+        <div id="records-state" class="state-card" hidden></div>
+        <div class="table-wrap" id="records-table-wrap">
+          <table class="records-table">
+            <thead>
+              <tr><th>Vault tray</th><th>Location</th><th>Status</th><th>Request</th><th>Updated</th><th class="actions-heading">Actions</th></tr>
+            </thead>
+            <tbody id="records-body"></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <span id="page-summary">Page 1</span>
+          <div class="pagination-actions">
+            <button class="button button-outline button-small" id="previous-page" type="button" aria-label="Previous page">← Previous</button>
+            <button class="button button-outline button-small" id="next-page" type="button" aria-label="Next page">Next →</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="review-panel" class="panel" aria-labelledby="review-tab" hidden>
+        <div class="panel-heading">
+          <div>
+            <div class="heading-with-count"><h2>Review queue</h2><span class="queue-count" id="queue-total">0</span></div>
+            <p>Review submitted requests. The request maker cannot approve or reject their own submission.</p>
+          </div>
+          <button class="button button-subtle" id="refresh-pending" type="button"><span aria-hidden="true">↻</span> Refresh queue</button>
+        </div>
+        <div id="pending-state" class="state-card" hidden></div>
+        <div class="table-wrap" id="pending-table-wrap">
+          <table class="records-table">
+            <thead>
+              <tr><th>Vault tray</th><th>Change</th><th>Submitted by</th><th>Submitted</th><th>Version</th><th class="actions-heading">Review</th></tr>
+            </thead>
+            <tbody id="pending-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <footer class="footer"><span>Vault Storage Maintenance</span><span>Changes to approved records require review.</span></footer>
+  </div>
+
+  <dialog id="record-dialog" class="dialog dialog-wide" aria-labelledby="record-dialog-title">
+    <form id="record-form" novalidate>
+      <div class="dialog-header">
+        <div><p class="eyebrow" id="record-eyebrow">VAULT RECORD</p><h2 id="record-dialog-title">Add vault tray</h2></div>
+        <button type="button" class="icon-button" data-close="record-dialog" aria-label="Close dialog">×</button>
+      </div>
+      <div class="dialog-body">
+        <div id="record-error" class="alert alert-error" role="alert" hidden></div>
+        <div class="form-intro" id="form-intro">Enter the tray details. You can save a draft or send it for approval.</div>
+        <div class="form-grid">
+          <label class="field"><span>Tray code <b>*</b></span><input id="form-vaultTrayCode" name="vaultTrayCode" required maxlength="100" autocomplete="off" aria-describedby="code-hint"><small id="code-hint">Unique identifier; cannot be changed after approval.</small></label>
+          <label class="field"><span>Tray name <b>*</b></span><input id="form-vaultTrayName" name="vaultTrayName" required maxlength="255" autocomplete="off"></label>
+          <label class="field"><span>Location <b>*</b></span><select id="form-vaultLocation" name="vaultLocation" required data-dropdown="VAULT_LOCATION"><option value="">Select location</option></select></label>
+          <label class="field"><span>Branch <b>*</b></span><select id="form-vaultBranch" name="vaultBranch" required data-dropdown="VAULT_BRANCH"><option value="">Select branch</option></select></label>
+          <label class="field"><span>Room <b>*</b></span><select id="form-vaultRoom" name="vaultRoom" required data-dropdown="VAULT_ROOM"><option value="">Select room</option></select></label>
+          <label class="field"><span>Rack <b>*</b></span><select id="form-vaultRack" name="vaultRack" required data-dropdown="VAULT_RACK"><option value="">Select rack</option></select></label>
+          <label class="field"><span>Shelf <b>*</b></span><select id="form-vaultShelf" name="vaultShelf" required data-dropdown="VAULT_SHELF"><option value="">Select shelf</option></select></label>
+          <label class="field checkbox-field"><input id="form-isActive" name="isActive" type="checkbox" checked><span><strong>Active tray</strong><small>Turn off to request approved deactivation.</small></span></label>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button type="button" class="button button-outline" data-close="record-dialog">Cancel</button>
+        <span class="footer-spacer"></span>
+        <button class="button button-secondary" id="save-draft" type="button">Save draft</button>
+        <button class="button button-primary" id="submit-record" type="button">Submit for approval</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="reject-dialog" class="dialog dialog-compact" aria-labelledby="reject-title">
+    <form id="reject-form">
+      <div class="dialog-header">
+        <div><p class="eyebrow">REVIEW REQUEST</p><h2 id="reject-title">Reject request</h2></div>
+        <button type="button" class="icon-button" data-close="reject-dialog" aria-label="Close dialog">×</button>
+      </div>
+      <div class="dialog-body">
+        <p class="form-intro">Provide a reason so the request maker knows what to change.</p>
+        <label class="field"><span>Rejection reason <b>*</b></span><textarea id="rejection-reason" name="reason" rows="4" maxlength="500" required placeholder="Enter the reason for rejection"></textarea><small class="field-error" id="rejection-error" hidden>Please provide a rejection reason.</small></label>
+      </div>
+      <div class="dialog-footer">
+        <button type="button" class="button button-outline" data-close="reject-dialog">Cancel</button>
+        <span class="footer-spacer"></span>
+        <button class="button button-danger" type="submit">Reject request</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="audit-dialog" class="dialog dialog-wide" aria-labelledby="audit-title">
+    <div class="dialog-header">
+      <div><p class="eyebrow">ACTIVITY</p><h2 id="audit-title">Audit history</h2></div>
+      <button type="button" class="icon-button" data-close="audit-dialog" aria-label="Close dialog">×</button>
+    </div>
+    <div class="dialog-body" id="audit-content"></div>
+    <div class="dialog-footer"><span class="footer-spacer"></span><button type="button" class="button button-outline" data-close="audit-dialog">Close</button></div>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog dialog-compact" aria-labelledby="confirm-title">
+    <div class="dialog-header">
+      <div><p class="eyebrow">CONFIRM ACTION</p><h2 id="confirm-title">Confirm action</h2></div>
+      <button type="button" class="icon-button" data-close="confirm-dialog" aria-label="Close dialog">×</button>
+    </div>
+    <div class="dialog-body"><p id="confirm-message" class="form-intro"></p></div>
+    <div class="dialog-footer">
+      <button type="button" class="button button-outline" data-close="confirm-dialog">Cancel</button>
+      <span class="footer-spacer"></span>
+      <button type="button" class="button button-primary" id="confirm-action">Confirm</button>
+    </div>
+  </dialog>
+
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>
