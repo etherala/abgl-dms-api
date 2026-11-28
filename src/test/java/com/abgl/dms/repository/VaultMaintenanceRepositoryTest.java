@@ -4,6 +4,7 @@ import com.abgl.dms.vaultmaintenance.VaultMaintenanceRecord;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceSearch;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceInput;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceAuditItem;
+import com.abgl.dms.vaultmaintenance.VaultHierarchyOption;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
@@ -41,6 +42,57 @@ class VaultMaintenanceRepositoryTest {
                 ArgumentMatchers.<RowMapper<VaultMaintenanceRecord>>any());
         assertTrue(sqlCaptor.getValue().startsWith("SELECT vault_id, wb_id,"));
         assertTrue(sqlCaptor.getValue().contains("FROM dms.vault_storage_wb"));
+    }
+
+    @Test
+    void hierarchyChildrenAreScopedToActiveApprovedRecordsAndExactParent() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        VaultHierarchyOption branch = new VaultHierarchyOption("BRANCH-01", "Head office");
+        when(jdbcTemplate.query(
+                anyString(),
+                ArgumentMatchers.<RowMapper<VaultHierarchyOption>>any(),
+                eq("VAULT_BRANCH"), eq("VAULT_LOCATION"), eq("LOC-01")))
+                .thenReturn(List.of(branch));
+        VaultMaintenanceRepository repository = new VaultMaintenanceRepository(jdbcTemplate);
+
+        List<VaultHierarchyOption> items = repository.findHierarchyChildren(
+                "VAULT_LOCATION", "LOC-01", "VAULT_BRANCH");
+
+        assertTrue(items.contains(branch));
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).query(
+                sqlCaptor.capture(),
+                ArgumentMatchers.<RowMapper<VaultHierarchyOption>>any(),
+                eq("VAULT_BRANCH"), eq("VAULT_LOCATION"), eq("LOC-01"));
+        String sql = sqlCaptor.getValue();
+        assertTrue(sql.contains("md_type = ?"));
+        assertTrue(sql.contains("md_parent_type = ?"));
+        assertTrue(sql.contains("md_parent_code = ?"));
+        assertTrue(sql.contains("status = 'A' AND is_active = TRUE"));
+        assertTrue(sql.contains("ORDER BY md_desc, md_code"));
+    }
+
+    @Test
+    void invalidHierarchyIsRejectedBeforeSaving() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        when(jdbcTemplate.queryForObject(
+                contains("VAULT_SHELF"), eq(Boolean.class),
+                anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(false);
+        VaultMaintenanceRepository repository = new VaultMaintenanceRepository(jdbcTemplate);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> repository.createDraft(input(), "maker", "127.0.0.1"));
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).queryForObject(
+                sqlCaptor.capture(), eq(Boolean.class),
+                eq("LOCATION-1"), eq("BRANCH-1"), eq("ROOM-1"), eq("RACK-1"), eq("SHELF-1"));
+        String sql = sqlCaptor.getValue();
+        assertTrue(sql.contains("branch.md_parent_code = location.md_code"));
+        assertTrue(sql.contains("room.md_parent_code = branch.md_code"));
+        assertTrue(sql.contains("rack.md_parent_code = room.md_code"));
+        assertTrue(sql.contains("shelf.md_parent_code = rack.md_code"));
+        verify(jdbcTemplate, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
     }
 
     @Test
@@ -121,6 +173,9 @@ class VaultMaintenanceRepositoryTest {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         VaultMaintenanceRecord pending = record("P", "U", "maker", 3);
         VaultMaintenanceRecord current = record("A", null, "maker", 3);
+        when(jdbcTemplate.queryForObject(
+                contains("VAULT_SHELF"), eq(Boolean.class),
+                anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(true);
         when(jdbcTemplate.query(
                 anyString(),
                 ArgumentMatchers.<RowMapper<VaultMaintenanceRecord>>any(),

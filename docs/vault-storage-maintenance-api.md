@@ -4,7 +4,7 @@ Base path: `/api/vault/maintenance`. Requests require the application's normal a
 
 ## Browser UI
 
-The responsive maintenance screen is available at `/vault-maintenance.html` after signing in to the application. It is implemented with static HTML, CSS, and JavaScript under `src/main/resources/static/`; the API repository has no separate frontend framework or component library. The page uses the authenticated session and Spring CSRF token endpoint, and calls only the API routes documented below. It provides search and pagination, separate main/workbench results, create/edit, pending review, dropdowns, confirmations, and audit history.
+The responsive maintenance screen is available at `/vault-maintenance.html` after signing in to the application. Its static HTML, CSS, and JavaScript live under `public/` in the `abgl-dms` frontend repository and are copied to the frontend build output. The page uses the authenticated same-origin session and CSRF token endpoint and calls the API routes documented below.
 
 Before deployment, run `src/main/resources/db/manual/vault_storage_maintenance.sql`. It removes the invalid archive action constraint, checks and enforces unique workbench tray codes, and advances the workbench identity sequence past existing main/workbench IDs. Run it before enabling writes; resolve any pre-existing duplicate workbench tray codes it reports.
 
@@ -19,7 +19,7 @@ Before deployment, run `src/main/resources/db/manual/vault_storage_maintenance.s
 
 ## Dropdowns
 
-Load these lists from the existing metadata endpoint. It returns active approved metadata as `{ "items": [{ "md_code": "...", "md_desc": "..." }] }`.
+Search filters load flat lists from the existing metadata endpoint. It returns active approved metadata as `{ "items": [{ "md_code": "...", "md_desc": "..." }] }`.
 
 | Form field | Request |
 |---|---|
@@ -29,7 +29,33 @@ Load these lists from the existing metadata endpoint. It returns active approved
 | `vaultRack` | `GET /api/metadata/drop-list?md_type=VAULT_RACK` |
 | `vaultShelf` | `GET /api/metadata/drop-list?md_type=VAULT_SHELF` |
 
-Submit each dropdown's `md_code`, not its description. The API validates that all five selected values are active approved metadata.
+The add/edit form uses the dependent hierarchy endpoints below. The hierarchy is `VAULT_LOCATION → VAULT_BRANCH → VAULT_ROOM → VAULT_RACK → VAULT_SHELF`; each child is filtered by its exact `md_parent_type` and `md_parent_code`. Changing a parent clears all downstream selections. Submit each selected `md_code`, not its description. Every write and approval validates that all five selected values are active, approved, and related to one another through this exact chain.
+
+### Hierarchy lookup
+
+The combined endpoint returns root locations and the child lists for each supplied parent code. Omit parent codes to return only root locations:
+
+```http
+GET /api/vault/maintenance/hierarchy?locationCode=LOC-01&branchCode=BRANCH-01&roomCode=ROOM-01&rackCode=RACK-02
+```
+
+```json
+{
+  "locations": [{ "mdCode": "LOC-01", "mdDesc": "Central Campus" }],
+  "branches": [{ "mdCode": "BRANCH-01", "mdDesc": "Head Office" }],
+  "rooms": [{ "mdCode": "ROOM-01", "mdDesc": "Records Room" }],
+  "racks": [{ "mdCode": "RACK-02", "mdDesc": "Rack A" }],
+  "shelves": [{ "mdCode": "SHELF-01", "mdDesc": "Shelf A" }]
+}
+```
+
+For a single child level:
+
+```http
+GET /api/vault/maintenance/hierarchy/children?parentType=VAULT_LOCATION&parentCode=LOC-01&childType=VAULT_BRANCH
+```
+
+The child endpoint returns `{ "items": [{ "mdCode": "BRANCH-01", "mdDesc": "Head Office" }] }`. Child lookups require a supported parent/child type pair and a parent code. Empty child lists are returned as empty arrays; the endpoint does not fall back to an unfiltered list. All results are active and approved, ordered by description and code.
 
 ## Common form request
 
@@ -55,6 +81,8 @@ Limits: tray code 100 characters, tray name 255, shelf/rack/room/branch 100 each
 | Method and path | Purpose | Request body |
 |---|---|---|
 | `POST /search` | Paginated search across main and workbench rows | Search JSON below |
+| `GET /hierarchy` | Load locations and child lists filtered by supplied parent codes | None |
+| `GET /hierarchy/children` | Load one child list for a supported parent/child type pair | None |
 | `GET /records/{vaultId}` | Read an approved/main record | None |
 | `POST /records` | Create and submit a new tray for approval | Common form request |
 | `POST /records/draft` | Create a new draft | Common form request |
@@ -244,7 +272,7 @@ Expected statuses: `400` invalid input/dropdown/status, `404` unknown `vaultId`/
 
 ## Workflow and UI rules
 
-1. Load all five dropdown lists; show descriptions and submit codes.
+1. Load flat metadata lists for search filters. Load the add/edit hierarchy from `/hierarchy`; progressively fetch children and clear all downstream selections when a parent changes. Hydrate edit values with their matching child lists.
 2. The search grid should display tray code/name, location hierarchy, active flag, status, action, version, submitter/time, creator/time, and available workflow actions.
 3. Keep main and workbench rows distinct when both exist. Main-row edit uses `vaultId`; workbench save/submit/approve/reject/cancel uses `wbId`.
 4. New form actions: **Save draft** calls `POST /records/draft`; **Submit for approval** calls `POST /records`.
@@ -257,4 +285,4 @@ Expected statuses: `400` invalid input/dropdown/status, `404` unknown `vaultId`/
 
 ## Copyable frontend implementation prompt
 
-> Build a polished, responsive Vault Storage Maintenance UI for the existing authenticated application. Use the existing design system and component conventions. Implement a searchable paginated tray grid, create/edit form, reviewer queue, status badges, dropdowns loaded from the five `/api/metadata/drop-list?md_type=...` endpoints, confirmation/rejection dialogs, and audit history. Integrate exactly with the endpoint table and JSON contracts in this document. Keep `vaultId` for approved record operations and `wbId` for workbench operations; never substitute one for the other. Display main and workbench search rows separately if both exist for one tray. Support statuses `I`, `P`, `R`, `A`, and `D`; permit editing/saving/submitting workbench records in `I/R/D`; only allow approve/reject on pending `P`; do not provide approved deletion. Deactivate by submitting an edit with `isActive=false`. Do not send actor usernames; the backend derives identity. Provide accessible labels, keyboard navigation, clear inline validation, loading skeletons, empty states, success/error notifications, and responsive layouts. Use the provided request and response examples as the API source of truth; do not invent endpoints or fields.
+> Build a polished, responsive Vault Storage Maintenance UI for the existing authenticated application. Use the existing design system and component conventions. Implement a searchable paginated tray grid, create/edit form, reviewer queue, status badges, dependent Location → Branch → Room → Rack → Shelf dropdowns from `/api/vault/maintenance/hierarchy`, confirmation/rejection dialogs, and audit history. Keep Tray Code and Tray Name after Shelf in the form. Integrate exactly with the endpoint table and JSON contracts in this document. Keep `vaultId` for approved record operations and `wbId` for workbench operations; never substitute one for the other. Display main and workbench search rows separately if both exist for one tray. Support statuses `I`, `P`, `R`, `A`, and `D`; permit editing/saving/submitting workbench records in `I/R/D`; only allow approve/reject on pending `P`; do not provide approved deletion. Deactivate by submitting an edit with `isActive=false`. Do not send actor usernames; the backend derives identity. Provide accessible labels, keyboard navigation, clear inline validation, loading skeletons, empty states, success/error notifications, and responsive layouts. Use the provided request and response examples as the API source of truth; do not invent endpoints or fields.

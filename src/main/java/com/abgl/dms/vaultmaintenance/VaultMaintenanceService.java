@@ -54,6 +54,35 @@ public class VaultMaintenanceService {
         return repository.findWorkbench(wbId);
     }
 
+    public VaultHierarchy getHierarchy(
+            String locationCode, String branchCode, String roomCode, String rackCode) {
+        return repository.findHierarchy(
+                cleanNullable(locationCode), cleanNullable(branchCode),
+                cleanNullable(roomCode), cleanNullable(rackCode));
+    }
+
+    public List<VaultHierarchyOption> getHierarchyChildren(
+            String parentType, String parentCode, String childType) {
+        String normalizedParentType = cleanNullable(parentType);
+        String normalizedParentCode = cleanNullable(parentCode);
+        String normalizedChildType = cleanNullable(childType);
+        if (normalizedParentCode == null) {
+            throw new IllegalArgumentException("parentCode is required");
+        }
+        String expectedChildType = switch (normalizedParentType == null ? "" : normalizedParentType) {
+            case "VAULT_LOCATION" -> "VAULT_BRANCH";
+            case "VAULT_BRANCH" -> "VAULT_ROOM";
+            case "VAULT_ROOM" -> "VAULT_RACK";
+            case "VAULT_RACK" -> "VAULT_SHELF";
+            default -> throw new IllegalArgumentException("Unsupported vault parent type");
+        };
+        if (!expectedChildType.equals(normalizedChildType)) {
+            throw new IllegalArgumentException("Unsupported vault parent/child type combination");
+        }
+        return repository.findHierarchyChildren(
+                normalizedParentType, normalizedParentCode, normalizedChildType);
+    }
+
     public VaultMaintenanceRecord create(
             VaultMaintenanceInput input, String username, String ipAddress) {
         return repository.create(normalize(input), username, ipAddress);
