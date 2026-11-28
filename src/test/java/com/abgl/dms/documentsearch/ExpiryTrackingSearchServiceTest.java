@@ -29,15 +29,16 @@ class ExpiryTrackingSearchServiceTest {
                 "REF-1", "CAT-1", "TYPE-1", "agreement",
                 null, null, null, null, null, null, "A",
                 2, 5, 30, "DS");
-        when(repository.countVisibleDocuments("admin", sharedRequest)).thenReturn(1L);
-        when(repository.searchVisibleDocuments("admin", sharedRequest, 5, 5)).thenReturn(List.of());
+        when(repository.countVisibleExpiryTrackingDocuments("admin", sharedRequest)).thenReturn(1L);
+        when(repository.searchVisibleExpiryTrackingDocuments("admin", sharedRequest, 5, 5))
+                .thenReturn(List.of());
 
         DocumentSearchPage page = service.search("admin", request);
 
         assertEquals(1, page.totalElements());
         assertEquals(2, page.page());
-        verify(repository).countVisibleDocuments("admin", sharedRequest);
-        verify(repository).searchVisibleDocuments("admin", sharedRequest, 5, 5);
+        verify(repository).countVisibleExpiryTrackingDocuments("admin", sharedRequest);
+        verify(repository).searchVisibleExpiryTrackingDocuments("admin", sharedRequest, 5, 5);
     }
 
     @Test
@@ -58,12 +59,13 @@ class ExpiryTrackingSearchServiceTest {
         DocumentSearchRequest sharedRequest = new DocumentSearchRequest(
                 null, null, null, null, null, null, null, null, null, null, null,
                 1, 10, null, "NE");
-        when(repository.countVisibleDocuments("admin", sharedRequest)).thenReturn(0L);
-        when(repository.searchVisibleDocuments("admin", sharedRequest, 10, 0)).thenReturn(List.of());
+        when(repository.countVisibleExpiryTrackingDocuments("admin", sharedRequest)).thenReturn(0L);
+        when(repository.searchVisibleExpiryTrackingDocuments("admin", sharedRequest, 10, 0))
+                .thenReturn(List.of());
 
         service.search("admin", request);
 
-        verify(repository).countVisibleDocuments("admin", sharedRequest);
+        verify(repository).countVisibleExpiryTrackingDocuments("admin", sharedRequest);
     }
 
     @Test

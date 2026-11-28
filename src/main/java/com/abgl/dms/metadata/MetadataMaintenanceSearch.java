@@ -8,6 +8,7 @@ public record MetadataMaintenanceSearch(
         @Size(max = 100) String mdCode,
         @Size(max = 255) String mdDesc,
         @Size(max = 100) String mdParentType,
+        @Size(max = 100) String mdParentCode,
         @Size(max = 20) String status,
         Boolean isActive,
         @Size(max = 100) String createdBy,

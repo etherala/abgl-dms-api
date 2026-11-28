@@ -8,5 +8,6 @@ public record MetadataMaintenanceInput(
         @NotBlank @Size(max = 100) String mdCode,
         @NotBlank @Size(max = 255) String mdDesc,
         @Size(max = 100) String mdParentType,
+        @Size(max = 100) String mdParentCode,
         Boolean isActive
 ) {}

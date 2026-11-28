@@ -38,6 +38,7 @@ public class MetadataMaintenanceService {
                 cleanNullable(search.mdCode()),
                 cleanNullable(search.mdDesc()),
                 cleanNullable(search.mdParentType()),
+                cleanNullable(search.mdParentCode()),
                 status == null ? null : status.toUpperCase(),
                 search.isActive(),
                 cleanNullable(search.createdBy()),
@@ -122,11 +123,18 @@ public class MetadataMaintenanceService {
     }
 
     private static MetadataMaintenanceInput normalize(MetadataMaintenanceInput input) {
+        String parentType = cleanNullable(input.mdParentType());
+        String parentCode = cleanNullable(input.mdParentCode());
+        if ((parentType == null) != (parentCode == null)) {
+            throw new IllegalArgumentException(
+                    "mdParentType and mdParentCode must both be supplied or both be null");
+        }
         return new MetadataMaintenanceInput(
                 input.mdType().trim(),
                 input.mdCode().trim(),
                 input.mdDesc().trim(),
-                cleanNullable(input.mdParentType()),
+                parentType,
+                parentCode,
                 input.isActive()
         );
     }
