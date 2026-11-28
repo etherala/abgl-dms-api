@@ -43,6 +43,7 @@ public final class MessageKeys {
     public static final String DOCUMENT_UPLOAD_EXPIRY_REQUIRED = "documentUpload.expiry.required";
     public static final String DOCUMENT_UPLOAD_EXPIRY_BEFORE_DOCUMENT = "documentUpload.expiry.beforeDocument";
     public static final String DOCUMENT_UPLOAD_DATE_INVALID = "documentUpload.date.invalid";
+    public static final String DOCUMENT_UPLOAD_DATE_FUTURE = "documentUpload.date.future";
     public static final String DOCUMENT_NOT_FOUND_OR_UNAUTHORIZED = "document.notFoundOrUnauthorized";
     public static final String DOCUMENT_MAINTENANCE_SUCCESS = "document.maintenance.success";
     public static final String DOCUMENT_ARCHIVE_SUCCESS = "document.archive.success";

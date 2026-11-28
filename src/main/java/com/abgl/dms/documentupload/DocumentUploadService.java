@@ -152,6 +152,7 @@ public class DocumentUploadService {
             validateMaintenanceIdentity(metadata);
             validateMetadata(metadata, false);
             LocalDate documentDate = parseDate(metadata.documentDate(), "documentDate");
+            validateDocumentDate(documentDate);
             LocalDate expiryDate = parseOptionalDate(metadata.expiryDate(), "expiryDate");
             validateDateOrder(documentDate, expiryDate);
             AuthorizedDocumentType documentType = validateTargetDocumentMetadata(username, user, metadata);
@@ -219,6 +220,7 @@ public class DocumentUploadService {
             }
             validateMetadata(metadata, false);
             LocalDate documentDate = parseDate(metadata.documentDate(), "documentDate");
+            validateDocumentDate(documentDate);
             LocalDate expiryDate = parseOptionalDate(metadata.expiryDate(), "expiryDate");
             validateDateOrder(documentDate, expiryDate);
             AuthorizedDocumentType documentType = validateTargetDocumentMetadata(username, user, metadata);
@@ -315,6 +317,7 @@ public class DocumentUploadService {
             validateMaintenanceIdentity(metadata);
             validateMetadata(metadata, false);
             LocalDate documentDate = parseDate(metadata.documentDate(), "documentDate");
+            validateDocumentDate(documentDate);
             LocalDate expiryDate = parseOptionalDate(metadata.expiryDate(), "expiryDate");
             validateDateOrder(documentDate, expiryDate);
             AuthorizedDocumentType documentType = validateTargetDocumentMetadata(username, user, metadata);
@@ -477,6 +480,7 @@ public class DocumentUploadService {
         try {
             validateMetadata(metadata);
             LocalDate documentDate = parseDate(metadata.documentDate(), "documentDate");
+            validateDocumentDate(documentDate);
             LocalDate expiryDate = metadata.expiryDate() == null || metadata.expiryDate().isBlank()
                     ? null
                     : parseDate(metadata.expiryDate(), "expiryDate");
@@ -862,6 +866,12 @@ public class DocumentUploadService {
     private void validateDateOrder(LocalDate documentDate, LocalDate expiryDate) {
         if (expiryDate != null && expiryDate.isBefore(documentDate)) {
             throw rejected(MessageKeys.DOCUMENT_UPLOAD_EXPIRY_BEFORE_DOCUMENT);
+        }
+    }
+
+    private void validateDocumentDate(LocalDate documentDate) {
+        if (documentDate.isAfter(LocalDate.now())) {
+            throw rejected(MessageKeys.DOCUMENT_UPLOAD_DATE_FUTURE);
         }
     }
 

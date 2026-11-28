@@ -19,6 +19,15 @@ public class DocumentSearchService {
     }
 
     public DocumentSearchPage search(String username, DocumentSearchRequest request) {
+        return search(username, request, false);
+    }
+
+    public DocumentSearchPage searchExpiryTracking(String username, DocumentSearchRequest request) {
+        return search(username, request, true);
+    }
+
+    private DocumentSearchPage search(
+            String username, DocumentSearchRequest request, boolean expiryTracking) {
         if (request == null) {
             throw new IllegalArgumentException("Search request is required");
         }
@@ -38,9 +47,13 @@ public class DocumentSearchService {
             throw new IllegalArgumentException("Page size must be between 1 and " + MAX_PAGE_SIZE);
         }
 
-        long totalElements = repository.countVisibleDocuments(username, request);
+        long totalElements = expiryTracking
+                ? repository.countVisibleExpiryTrackingDocuments(username, request)
+                : repository.countVisibleDocuments(username, request);
         long offset = ((long) page - 1) * pageSize;
-        var items = repository.searchVisibleDocuments(username, request, pageSize, offset);
+        var items = expiryTracking
+                ? repository.searchVisibleExpiryTrackingDocuments(username, request, pageSize, offset)
+                : repository.searchVisibleDocuments(username, request, pageSize, offset);
         int totalPages = (int) ((totalElements + pageSize - 1) / pageSize);
         return new DocumentSearchPage(items, totalElements, page, pageSize, totalPages);
     }

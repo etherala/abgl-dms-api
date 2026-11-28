@@ -28,7 +28,7 @@ public class ExpiryTrackingSearchService {
             }
         }
 
-        return documentSearchService.search(username, new DocumentSearchRequest(
+        return documentSearchService.searchExpiryTracking(username, new DocumentSearchRequest(
                 request.referenceCode(),
                 request.categoryCode(),
                 request.documentTypeCode(),

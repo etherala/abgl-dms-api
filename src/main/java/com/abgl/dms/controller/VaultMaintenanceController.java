@@ -7,6 +7,7 @@ import com.abgl.dms.vaultmaintenance.VaultMaintenanceRecord;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceRejection;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceSearch;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceService;
+import com.abgl.dms.vaultmaintenance.VaultHierarchy;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.dao.DuplicateKeyException;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -43,6 +45,23 @@ public class VaultMaintenanceController {
     @PostMapping("/search")
     public VaultMaintenancePage search(@Valid @RequestBody VaultMaintenanceSearch search) {
         return service.search(search);
+    }
+
+    @GetMapping("/hierarchy")
+    public VaultHierarchy getHierarchy(
+            @RequestParam(required = false) String locationCode,
+            @RequestParam(required = false) String branchCode,
+            @RequestParam(required = false) String roomCode,
+            @RequestParam(required = false) String rackCode) {
+        return service.getHierarchy(locationCode, branchCode, roomCode, rackCode);
+    }
+
+    @GetMapping("/hierarchy/children")
+    public Map<String, Object> getHierarchyChildren(
+            @RequestParam(required = false) String parentType,
+            @RequestParam(required = false) String parentCode,
+            @RequestParam(required = false) String childType) {
+        return Map.of("items", service.getHierarchyChildren(parentType, parentCode, childType));
     }
 
     @GetMapping("/records/{vaultId}")

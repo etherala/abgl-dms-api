@@ -135,9 +135,21 @@ public class DocumentSearchRepository {
         return count == null ? 0 : count;
     }
 
+    public long countVisibleExpiryTrackingDocuments(String username, DocumentSearchRequest request) {
+        QueryParts query = filterQuery(username, request, null, true);
+        Long count = jdbcTemplate.queryForObject(
+                COUNT_DOCUMENTS + query.whereClause(), Long.class, query.parameters().toArray());
+        return count == null ? 0 : count;
+    }
+
     public List<DocumentSearchItem> searchVisibleDocuments(
             String username, DocumentSearchRequest request, int pageSize, long offset) {
         return searchDocuments(username, request, null, pageSize, offset, SELECT_DOCUMENTS);
+    }
+
+    public List<DocumentSearchItem> searchVisibleExpiryTrackingDocuments(
+            String username, DocumentSearchRequest request, int pageSize, long offset) {
+        return searchDocuments(username, request, null, pageSize, offset, SELECT_DOCUMENTS, true);
     }
 
     public long countVisibleApprovalDocuments(String username, ApprovalDocumentSearchRequest request) {
@@ -165,7 +177,18 @@ public class DocumentSearchRepository {
             int pageSize,
             long offset,
             String selectQuery) {
-        QueryParts query = filterQuery(username, request, submittedBy);
+        return searchDocuments(username, request, submittedBy, pageSize, offset, selectQuery, false);
+    }
+
+    private List<DocumentSearchItem> searchDocuments(
+            String username,
+            DocumentSearchRequest request,
+            String submittedBy,
+            int pageSize,
+            long offset,
+            String selectQuery,
+            boolean expiryTracking) {
+        QueryParts query = filterQuery(username, request, submittedBy, expiryTracking);
         List<Object> parameters = new ArrayList<>(query.parameters());
         parameters.add(pageSize);
         parameters.add(offset);
@@ -227,7 +250,12 @@ public class DocumentSearchRepository {
         return "VE";
     }
 
-    private static final String SELECT_APPROVAL_DOCS = SELECT_DOCUMENTS;
+    private static final String SELECT_APPROVAL_DOCS = SELECT_DOCUMENTS.replace(
+            "(CURRENT_DATE - dm.created_datetime::date)::int AS day_pending",
+            "GREATEST("
+                    + "0,"
+                    + " (CURRENT_DATE - COALESCE(dm.updated_datetime, dm.created_datetime)::date)::int"
+                    + ") AS day_pending");
 
     public java.util.Optional<StoredDocument> findVisibleDocumentFile(
             String username, long imageId, int version) {
@@ -246,20 +274,26 @@ public class DocumentSearchRepository {
     }
 
     private QueryParts filterQuery(String username, DocumentSearchRequest request) {
-        return filterQuery(username, request, null);
+        return filterQuery(username, request, null, false);
     }
 
     private QueryParts approvalFilterQuery(String username, ApprovalDocumentSearchRequest request) {
-        QueryParts query = filterQuery(username, toDocumentSearchRequest(request), request.submittedBy());
-        return query;
+        return filterQuery(
+                username, toDocumentSearchRequest(request), request.submittedBy(), false);
     }
 
     private QueryParts filterQuery(
-            String username, DocumentSearchRequest request, String submittedBy) {
+            String username,
+            DocumentSearchRequest request,
+            String submittedBy,
+            boolean expiryTracking) {
         StringBuilder where = new StringBuilder();
         List<Object> parameters = new ArrayList<>();
         parameters.add(username);
 
+        if (expiryTracking) {
+            where.append(" AND dm.expiry_date IS NOT NULL");
+        }
         addExactFilter(where, parameters, "dm.reference_code", request.referenceCode());
         addExactFilter(where, parameters, "dt.document_category", request.categoryCode());
         addExactFilter(where, parameters, "dt.document_type_code", request.documentTypeCode());

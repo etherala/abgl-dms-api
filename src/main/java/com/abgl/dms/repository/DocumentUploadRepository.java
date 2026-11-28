@@ -94,7 +94,9 @@ public class DocumentUploadRepository {
             """;
 
     private static final String LOCK_VISIBLE_DOCUMENT = """
-            SELECT dm.document_id
+            SELECT dm.document_id,
+                   dm.created_by,
+                   dt.approval_type
             FROM dms.document_master dm
             JOIN dms.document_type_master dt
               ON dt.document_type_code = dm.document_type
@@ -556,7 +558,13 @@ public class DocumentUploadRepository {
             DocumentApprovalRecord document,
             String approvalStatus,
             String ipAddress) {
-        lockVisiblePendingDocument(username, document.imageId(), document.version());
+        PendingDocument pendingDocument = lockVisiblePendingDocument(
+                username, document.imageId(), document.version());
+        if ("MAKER_CHECKER".equalsIgnoreCase(pendingDocument.approvalType())
+                && pendingDocument.createdBy() != null
+                && pendingDocument.createdBy().equalsIgnoreCase(username)) {
+            throw new IllegalArgumentException("A maker cannot review their own document");
+        }
         int auditRows = jdbcTemplate.update(
                 INSERT_DOCUMENT_AUDIT, document.imageId(), document.version());
         requireOneRow(auditRows, "Document approval audit snapshot was not created");
@@ -659,16 +667,22 @@ public class DocumentUploadRepository {
         requireOneRow(matches.size(), "Document identity is not unique");
     }
 
-    private void lockVisiblePendingDocument(String username, long imageId, int version) {
-        List<Long> matches = jdbcTemplate.query(
+    private PendingDocument lockVisiblePendingDocument(String username, long imageId, int version) {
+        List<PendingDocument> matches = jdbcTemplate.query(
                 LOCK_VISIBLE_PENDING_DOCUMENT,
-                (resultSet, rowNumber) -> resultSet.getLong("document_id"),
+                (resultSet, rowNumber) -> new PendingDocument(
+                        resultSet.getLong("document_id"),
+                        resultSet.getString("created_by"),
+                        resultSet.getString("approval_type")),
                 username, imageId, version);
         if (matches.isEmpty()) {
             throw new DocumentNotAccessibleException();
         }
         requireOneRow(matches.size(), "Document identity is not unique");
+        return matches.get(0);
     }
+
+    private record PendingDocument(long documentId, String createdBy, String approvalType) {}
 
     private void insertMaintenanceAudit(DocumentMaintenanceRecord document) {
         insertMaintenanceAudit(
