@@ -11,6 +11,7 @@ public record MetadataMaintenanceRecord(
         String mdDesc,
         boolean isActive,
         String mdParentType,
+        String mdParentCode,
         String status,
         String createdBy,
         OffsetDateTime createdDatetime,

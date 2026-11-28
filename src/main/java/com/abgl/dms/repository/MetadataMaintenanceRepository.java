@@ -23,14 +23,14 @@ public class MetadataMaintenanceRepository {
     private static final String WORKFLOW_TYPE = "METADATA_DROPLIST";
     private static final String MAIN_COLUMNS = """
             id, NULL::uuid AS wb_id, md_type, md_code, md_desc, is_active,
-            md_parent_type, status, created_by, created_datetime,
+            md_parent_type, md_parent_code, status, created_by, created_datetime,
             NULL::varchar AS submitted_by, NULL::timestamptz AS submitted_datetime,
             approved_by, approved_datetime, NULL::varchar AS rejected_by,
             NULL::timestamptz AS rejected_datetime, NULL::varchar AS rejection_reason,
             updated_by, updated_datetime, NULL::varchar AS action_type, version
             """;
     private static final String WB_COLUMNS = """
-            wb_id, md_type, md_code, md_desc, is_active, md_parent_type, status,
+            wb_id, md_type, md_code, md_desc, is_active, md_parent_type, md_parent_code, status,
             created_by, created_datetime, submitted_by, submitted_datetime,
             approved_by, approved_datetime, rejected_by, rejected_datetime,
             rejection_reason, updated_by, updated_datetime, action_type, version
@@ -60,6 +60,7 @@ public class MetadataMaintenanceRepository {
         addLikeFilter(where, parameters, "md_code", search.mdCode());
         addLikeFilter(where, parameters, "md_desc", search.mdDesc());
         addLikeFilter(where, parameters, "md_parent_type", search.mdParentType());
+        addLikeFilter(where, parameters, "md_parent_code", search.mdParentCode());
         addLikeFilter(where, parameters, "status", search.status());
         addLikeFilter(where, parameters, "created_by", search.createdBy());
         if (search.isActive() != null) {
@@ -98,7 +99,7 @@ public class MetadataMaintenanceRepository {
 
     public List<MetadataMaintenanceRecord> findPending() {
         return jdbcTemplate.query("""
-                SELECT wb_id, md_type, md_code, md_desc, is_active, md_parent_type, status,
+                SELECT wb_id, md_type, md_code, md_desc, is_active, md_parent_type, md_parent_code, status,
                        created_by, created_datetime, submitted_by, submitted_datetime,
                        approved_by, approved_datetime, rejected_by, rejected_datetime,
                        rejection_reason, updated_by, updated_datetime, action_type, version
@@ -134,6 +135,7 @@ public class MetadataMaintenanceRepository {
             UUID wbId, MetadataMaintenanceInput input, String username, String ipAddress) {
         MetadataMaintenanceRecord before = findWorkbenchForUpdate(wbId);
         requireDraft(before);
+        validateParentPair(input.mdParentType(), input.mdParentCode());
         ensureNoSystemDataCollision(input.mdType(), input.mdCode());
         if ("I".equals(before.actionType())) {
             ensureNoMainRecord(input.mdType(), input.mdCode());
@@ -143,14 +145,15 @@ public class MetadataMaintenanceRepository {
         try {
             int updated = jdbcTemplate.update("""
                     UPDATE dms.app_metadata_droplist_wb
-                    SET md_type = ?, md_code = ?, md_desc = ?, md_parent_type = ?,
+                    SET md_type = ?, md_code = ?, md_desc = ?, md_parent_type = ?, md_parent_code = ?,
                         is_active = ?, status = 'I',
                         submitted_by = NULL, submitted_datetime = NULL,
                         rejected_by = NULL, rejected_datetime = NULL, rejection_reason = NULL,
                         updated_by = ?, updated_datetime = CURRENT_TIMESTAMP
                     WHERE wb_id = ? AND status IN ('I', 'R', 'D')
                     """, clean(input.mdType()), clean(input.mdCode()), clean(input.mdDesc()),
-                    cleanNullable(input.mdParentType()), activeValue(input, before.isActive()),
+                    cleanNullable(input.mdParentType()), cleanNullable(input.mdParentCode()),
+                    activeValue(input, before.isActive()),
                     username, wbId);
             requireOneRow(updated, "Metadata draft was not updated");
         } catch (DuplicateKeyException exception) {
@@ -207,6 +210,7 @@ public class MetadataMaintenanceRepository {
         MetadataMaintenanceRecord request = findWorkbenchForUpdate(wbId);
         requirePending(request);
         requireDifferentReviewer(request, username);
+        validateParentPair(request.mdParentType(), request.mdParentCode());
 
         Long mainId;
         if ("I".equals(request.actionType())) {
@@ -269,7 +273,8 @@ public class MetadataMaintenanceRepository {
             throw new IllegalStateException("A metadata request is already pending for this type and code");
         }
         MetadataMaintenanceInput input = new MetadataMaintenanceInput(
-                current.mdType(), current.mdCode(), current.mdDesc(), current.mdParentType(), false);
+                current.mdType(), current.mdCode(), current.mdDesc(),
+                current.mdParentType(), current.mdParentCode(), false);
         MetadataMaintenanceRecord request;
         if (existingRequest == null) {
             request = insertWorkbench(input, "D", "P", recordVersion(current), username, username, ipAddress);
@@ -333,6 +338,7 @@ public class MetadataMaintenanceRepository {
     private MetadataMaintenanceRecord insertWorkbench(
             MetadataMaintenanceInput input, String action, String status, int version,
             String username, String submitter, String ipAddress) {
+        validateParentPair(input.mdParentType(), input.mdParentCode());
         ensureNoSystemDataCollision(input.mdType(), input.mdCode());
         if ("I".equals(action)) {
             ensureNoMainRecord(input.mdType(), input.mdCode());
@@ -355,17 +361,18 @@ public class MetadataMaintenanceRepository {
         try {
             UUID wbId = jdbcTemplate.queryForObject("""
                     INSERT INTO dms.app_metadata_droplist_wb (
-                        md_type, md_code, md_desc, md_parent_type, is_active,
+                        md_type, md_code, md_desc, md_parent_type, md_parent_code, is_active,
                         action_type, status, created_by, submitted_by, submitted_datetime,
                         updated_by, updated_datetime, version
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             CASE WHEN CAST(? AS varchar) IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
                             ?, CASE WHEN CAST(? AS varchar) IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END, ?)
                     RETURNING wb_id
                     """, UUID.class,
                     clean(input.mdType()), clean(input.mdCode()), clean(input.mdDesc()),
-                    cleanNullable(input.mdParentType()), activeValue(input), action, status,
+                    cleanNullable(input.mdParentType()), cleanNullable(input.mdParentCode()),
+                    activeValue(input), action, status,
                     username, submitter, submitter, submitter, submitter, version);
             if (wbId == null) {
                 throw new IllegalStateException("Metadata workbench record was not created");
@@ -386,10 +393,11 @@ public class MetadataMaintenanceRepository {
     private void resetWorkbenchRequest(
             UUID wbId, MetadataMaintenanceInput input, String action, String status,
             int version, String username) {
+        validateParentPair(input.mdParentType(), input.mdParentCode());
         try {
             int updated = jdbcTemplate.update("""
                     UPDATE dms.app_metadata_droplist_wb
-                    SET md_desc = ?, md_parent_type = ?, is_active = ?, action_type = ?,
+                    SET md_desc = ?, md_parent_type = ?, md_parent_code = ?, is_active = ?, action_type = ?,
                         status = ?, created_by = ?, created_datetime = CURRENT_TIMESTAMP,
                         submitted_by = CASE WHEN ? = 'P' THEN ? ELSE NULL END,
                         submitted_datetime = CASE WHEN ? = 'P' THEN CURRENT_TIMESTAMP ELSE NULL END,
@@ -398,6 +406,7 @@ public class MetadataMaintenanceRepository {
                         version = ?
                     WHERE wb_id = ? AND status IN ('I', 'R', 'D')
                     """, clean(input.mdDesc()), cleanNullable(input.mdParentType()),
+                    cleanNullable(input.mdParentCode()),
                     activeValue(input), action, status, username, status, username, status,
                     username, version, wbId);
             requireOneRow(updated, "Metadata workbench request cannot be reused");
@@ -407,6 +416,7 @@ public class MetadataMaintenanceRepository {
     }
 
     private void validateSubmission(MetadataMaintenanceRecord request) {
+        validateParentPair(request.mdParentType(), request.mdParentCode());
         ensureNoSystemDataCollision(request.mdType(), request.mdCode());
         if ("I".equals(request.actionType())) {
             ensureNoMainRecord(request.mdType(), request.mdCode());
@@ -417,6 +427,39 @@ public class MetadataMaintenanceRepository {
             }
         } else {
             throw new IllegalStateException("Unsupported metadata action type");
+        }
+    }
+
+    private void validateParentPair(String parentType, String parentCode) {
+        String normalizedType = cleanNullable(parentType);
+        String normalizedCode = cleanNullable(parentCode);
+        if ((normalizedType == null) != (normalizedCode == null)) {
+            throw new IllegalArgumentException(
+                    "mdParentType and mdParentCode must both be supplied or both be null");
+        }
+        if (normalizedType == null) {
+            return;
+        }
+
+        Boolean exists = jdbcTemplate.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM dms.app_metadata_droplist
+                    WHERE LOWER(md_type) = LOWER(?)
+                      AND LOWER(md_code) = LOWER(?)
+                      AND status = 'A'
+                      AND is_active = TRUE
+                    UNION ALL
+                    SELECT 1
+                    FROM dms.app_sysdata_droplist
+                    WHERE LOWER(sd_type) = LOWER(?)
+                      AND LOWER(sd_code) = LOWER(?)
+                )
+                """, Boolean.class,
+                normalizedType, normalizedCode, normalizedType, normalizedCode);
+        if (!Boolean.TRUE.equals(exists)) {
+            throw new IllegalArgumentException(
+                    "The parent code is missing, inactive, or not approved for the selected parent type");
         }
     }
 
@@ -493,11 +536,11 @@ public class MetadataMaintenanceRepository {
     private Long insertApprovedRecord(MetadataMaintenanceRecord request, String approver) {
         Long id = jdbcTemplate.queryForObject("""
                 INSERT INTO dms.app_metadata_droplist (
-                    md_type, md_code, md_desc, md_parent_type, status, is_active,
+                    md_type, md_code, md_desc, md_parent_type, md_parent_code, status, is_active,
                     created_by, created_datetime, approved_by, approved_datetime,
                     updated_by, updated_datetime, version
                 )
-                SELECT md_type, md_code, md_desc, md_parent_type, 'A', is_active,
+                SELECT md_type, md_code, md_desc, md_parent_type, md_parent_code, 'A', is_active,
                        created_by, created_datetime, ?, CURRENT_TIMESTAMP,
                        updated_by, updated_datetime, version
                 FROM dms.app_metadata_droplist_wb
@@ -513,11 +556,11 @@ public class MetadataMaintenanceRepository {
     private void archiveApprovedRecord(MetadataMaintenanceRecord record, String actionType) {
         int archived = jdbcTemplate.update("""
                 INSERT INTO dms.app_metadata_droplist_au (
-                    id, md_type, md_code, md_desc, status, is_active, md_parent_type,
+                    id, md_type, md_code, md_desc, status, is_active, md_parent_type, md_parent_code,
                     action_type, created_by, created_datetime, approved_by, approved_datetime,
                     updated_by, updated_datetime, version, audit_date
                 )
-                SELECT id, md_type, md_code, md_desc, 'A', is_active, md_parent_type,
+                SELECT id, md_type, md_code, md_desc, 'A', is_active, md_parent_type, md_parent_code,
                        ?, created_by, created_datetime, approved_by, approved_datetime,
                        updated_by, updated_datetime, version, CURRENT_TIMESTAMP
                 FROM dms.app_metadata_droplist
@@ -529,11 +572,11 @@ public class MetadataMaintenanceRepository {
     private void updateMainRecord(MetadataMaintenanceRecord request, String approver) {
         int updated = jdbcTemplate.update("""
                 UPDATE dms.app_metadata_droplist
-                SET md_desc = ?, md_parent_type = ?, is_active = ?, status = 'A',
+                SET md_desc = ?, md_parent_type = ?, md_parent_code = ?, is_active = ?, status = 'A',
                     approved_by = ?, approved_datetime = CURRENT_TIMESTAMP,
                     updated_by = ?, updated_datetime = CURRENT_TIMESTAMP, version = ?
                 WHERE md_type = ? AND md_code = ? AND status = 'A'
-                """, request.mdDesc(), request.mdParentType(), request.isActive(), approver,
+                """, request.mdDesc(), request.mdParentType(), request.mdParentCode(), request.isActive(), approver,
                 request.submittedBy(), request.version(), request.mdType(), request.mdCode());
         requireOneRow(updated, "Metadata record was not updated during approval");
     }
@@ -564,7 +607,7 @@ public class MetadataMaintenanceRepository {
     private String searchableRecords() {
         return """
                 SELECT id, NULL::uuid AS wb_id, md_type, md_code, md_desc, is_active,
-                       md_parent_type, status, created_by, created_datetime,
+                       md_parent_type, md_parent_code, status, created_by, created_datetime,
                        NULL::varchar AS submitted_by, NULL::timestamptz AS submitted_datetime,
                        approved_by, approved_datetime, NULL::varchar AS rejected_by,
                        NULL::timestamptz AS rejected_datetime, NULL::varchar AS rejection_reason,
@@ -573,7 +616,7 @@ public class MetadataMaintenanceRepository {
                 FROM dms.app_metadata_droplist
                 UNION ALL
                 SELECT NULL::bigint AS id, wb_id, md_type, md_code, md_desc, is_active,
-                       md_parent_type, status, created_by, created_datetime,
+                       md_parent_type, md_parent_code, status, created_by, created_datetime,
                        submitted_by, submitted_datetime, approved_by, approved_datetime,
                        rejected_by, rejected_datetime, rejection_reason, updated_by,
                        updated_datetime, action_type, version
@@ -598,6 +641,7 @@ public class MetadataMaintenanceRepository {
                 rs.getString("md_desc"),
                 rs.getBoolean("is_active"),
                 rs.getString("md_parent_type"),
+                rs.getString("md_parent_code"),
                 rs.getString("status"),
                 rs.getString("created_by"),
                 rs.getObject("created_datetime", OffsetDateTime.class),

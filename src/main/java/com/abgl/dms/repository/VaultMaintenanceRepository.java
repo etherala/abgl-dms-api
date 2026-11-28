@@ -5,6 +5,8 @@ import com.abgl.dms.vaultmaintenance.VaultMaintenanceInput;
 import com.abgl.dms.vaultmaintenance.VaultMaintenancePage;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceRecord;
 import com.abgl.dms.vaultmaintenance.VaultMaintenanceSearch;
+import com.abgl.dms.vaultmaintenance.VaultHierarchy;
+import com.abgl.dms.vaultmaintenance.VaultHierarchyOption;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -104,6 +106,21 @@ public class VaultMaintenanceRepository {
                 WHERE status = 'P'
                 ORDER BY submitted_datetime, wb_id
                 """, this::mapRecord);
+    }
+
+    public VaultHierarchy findHierarchy(
+            String locationCode, String branchCode, String roomCode, String rackCode) {
+        return new VaultHierarchy(
+                findLocations(),
+                locationCode == null ? List.of() : findChildren("VAULT_LOCATION", locationCode, "VAULT_BRANCH"),
+                branchCode == null ? List.of() : findChildren("VAULT_BRANCH", branchCode, "VAULT_ROOM"),
+                roomCode == null ? List.of() : findChildren("VAULT_ROOM", roomCode, "VAULT_RACK"),
+                rackCode == null ? List.of() : findChildren("VAULT_RACK", rackCode, "VAULT_SHELF"));
+    }
+
+    public List<VaultHierarchyOption> findHierarchyChildren(
+            String parentType, String parentCode, String childType) {
+        return findChildren(parentType, parentCode, childType);
     }
 
     @Transactional
@@ -208,6 +225,10 @@ public class VaultMaintenanceRepository {
         VaultMaintenanceRecord request = findWorkbenchForUpdate(wbId);
         requirePending(request);
         requireDifferentReviewer(request, username);
+        if (!isValidHierarchy(toInput(request))) {
+            throw new IllegalStateException(
+                    "Vault hierarchy changed after this request was submitted; submit a new request");
+        }
 
         long vaultId;
         if ("I".equals(request.actionType())) {
@@ -467,29 +488,78 @@ public class VaultMaintenanceRepository {
     }
 
     private void validateDropdowns(VaultMaintenanceInput input) {
-        Boolean valid = jdbcTemplate.queryForObject("""
-                SELECT
-                    EXISTS (SELECT 1 FROM dms.app_metadata_droplist
-                            WHERE md_type = 'VAULT_SHELF' AND md_code = ?
-                              AND status = 'A' AND is_active = TRUE)
-                AND EXISTS (SELECT 1 FROM dms.app_metadata_droplist
-                            WHERE md_type = 'VAULT_RACK' AND md_code = ?
-                              AND status = 'A' AND is_active = TRUE)
-                AND EXISTS (SELECT 1 FROM dms.app_metadata_droplist
-                            WHERE md_type = 'VAULT_ROOM' AND md_code = ?
-                              AND status = 'A' AND is_active = TRUE)
-                AND EXISTS (SELECT 1 FROM dms.app_metadata_droplist
-                            WHERE md_type = 'VAULT_BRANCH' AND md_code = ?
-                              AND status = 'A' AND is_active = TRUE)
-                AND EXISTS (SELECT 1 FROM dms.app_metadata_droplist
-                            WHERE md_type = 'VAULT_LOCATION' AND md_code = ?
-                              AND status = 'A' AND is_active = TRUE)
-                """, Boolean.class, input.vaultShelf(), input.vaultRack(), input.vaultRoom(),
-                input.vaultBranch(), input.vaultLocation());
-        if (!Boolean.TRUE.equals(valid)) {
+        if (!isValidHierarchy(input)) {
             throw new IllegalArgumentException(
-                    "One or more vault dropdown values are invalid or inactive");
+                    "One or more vault dropdown values are invalid, inactive, or do not match the selected hierarchy");
         }
+    }
+
+    private boolean isValidHierarchy(VaultMaintenanceInput input) {
+        Boolean valid = jdbcTemplate.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM dms.app_metadata_droplist location
+                    JOIN dms.app_metadata_droplist branch
+                      ON branch.md_type = 'VAULT_BRANCH'
+                     AND branch.md_parent_type = 'VAULT_LOCATION'
+                     AND branch.md_parent_code = location.md_code
+                     AND branch.status = 'A' AND branch.is_active = TRUE
+                    JOIN dms.app_metadata_droplist room
+                      ON room.md_type = 'VAULT_ROOM'
+                     AND room.md_parent_type = 'VAULT_BRANCH'
+                     AND room.md_parent_code = branch.md_code
+                     AND room.status = 'A' AND room.is_active = TRUE
+                    JOIN dms.app_metadata_droplist rack
+                      ON rack.md_type = 'VAULT_RACK'
+                     AND rack.md_parent_type = 'VAULT_ROOM'
+                     AND rack.md_parent_code = room.md_code
+                     AND rack.status = 'A' AND rack.is_active = TRUE
+                    JOIN dms.app_metadata_droplist shelf
+                      ON shelf.md_type = 'VAULT_SHELF'
+                     AND shelf.md_parent_type = 'VAULT_RACK'
+                     AND shelf.md_parent_code = rack.md_code
+                     AND shelf.status = 'A' AND shelf.is_active = TRUE
+                    WHERE location.md_type = 'VAULT_LOCATION'
+                      AND location.md_parent_type IS NULL
+                      AND location.md_parent_code IS NULL
+                      AND location.md_code = ?
+                      AND location.status = 'A' AND location.is_active = TRUE
+                      AND branch.md_code = ?
+                      AND room.md_code = ?
+                      AND rack.md_code = ?
+                      AND shelf.md_code = ?
+                )
+                """, Boolean.class, input.vaultLocation(), input.vaultBranch(),
+                input.vaultRoom(), input.vaultRack(), input.vaultShelf());
+        return Boolean.TRUE.equals(valid);
+    }
+
+    private List<VaultHierarchyOption> findLocations() {
+        return jdbcTemplate.query("""
+                SELECT md_code, md_desc
+                FROM dms.app_metadata_droplist
+                WHERE md_type = 'VAULT_LOCATION'
+                  AND md_parent_type IS NULL
+                  AND md_parent_code IS NULL
+                  AND status = 'A' AND is_active = TRUE
+                ORDER BY md_desc, md_code
+                """, (rs, row) -> new VaultHierarchyOption(
+                rs.getString("md_code"), rs.getString("md_desc")));
+    }
+
+    private List<VaultHierarchyOption> findChildren(
+            String parentType, String parentCode, String childType) {
+        return jdbcTemplate.query("""
+                SELECT md_code, md_desc
+                FROM dms.app_metadata_droplist
+                WHERE md_type = ?
+                  AND md_parent_type = ?
+                  AND md_parent_code = ?
+                  AND status = 'A' AND is_active = TRUE
+                ORDER BY md_desc, md_code
+                """, (rs, row) -> new VaultHierarchyOption(
+                rs.getString("md_code"), rs.getString("md_desc")),
+                childType, parentType, parentCode);
     }
 
     private int validateAndGetRequestVersion(
